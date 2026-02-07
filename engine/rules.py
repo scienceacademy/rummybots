@@ -197,3 +197,75 @@ def score_hand(
 
     # Normal knock: knocker gets the difference
     return defender_dw - knocker_dw, "knock"
+
+
+# --- Layoffs ---
+
+def can_lay_off(card: Card, meld: Meld) -> bool:
+    """Check if a card can be laid off onto an existing meld."""
+    extended = list(meld) + [card]
+    return is_valid_set(extended) or is_valid_run(extended)
+
+
+def apply_layoffs(
+    knocker_melds: List[Meld], defender_unmelded: List[Card]
+) -> List[Card]:
+    """Automatically lay off defender's unmelded cards onto knocker's melds.
+
+    Modifies knocker_melds in place. Returns the remaining unmelded cards
+    after all possible layoffs.
+    """
+    remaining = list(defender_unmelded)
+    changed = True
+    while changed:
+        changed = False
+        for card in list(remaining):
+            for meld in knocker_melds:
+                if can_lay_off(card, meld):
+                    meld.append(card)
+                    remaining.remove(card)
+                    changed = True
+                    break
+    return remaining
+
+
+def score_with_layoffs(
+    knocker_hand: List[Card],
+    defender_hand: List[Card],
+    is_gin: bool = False,
+) -> Tuple[int, str]:
+    """Score a completed hand with automatic layoff handling.
+
+    After a knock, the defender's unmelded cards are automatically
+    laid off onto the knocker's melds where possible.
+
+    Args:
+        knocker_hand: The hand of the player who knocked.
+        defender_hand: The hand of the other player.
+        is_gin: Whether the knocker achieved gin (no layoffs allowed).
+
+    Returns:
+        A tuple of (points, result_type) where points is positive
+        if the knocker wins and negative if undercut.
+        result_type is one of: "gin", "knock", "undercut".
+    """
+    knocker_melds, knocker_unmelded = find_best_melds(knocker_hand)
+    knocker_dw = sum(c.deadwood_value for c in knocker_unmelded)
+
+    if is_gin:
+        defender_dw = calculate_deadwood(defender_hand)
+        return defender_dw + 25, "gin"
+
+    # Find defender's own melds first
+    _, defender_unmelded = find_best_melds(defender_hand)
+
+    # Lay off defender's unmelded cards onto copies of knocker's melds
+    knocker_melds_copy = [list(m) for m in knocker_melds]
+    remaining = apply_layoffs(knocker_melds_copy, defender_unmelded)
+    defender_dw = sum(c.deadwood_value for c in remaining)
+
+    if defender_dw <= knocker_dw:
+        diff = knocker_dw - defender_dw
+        return -(diff + 25), "undercut"
+
+    return defender_dw - knocker_dw, "knock"
