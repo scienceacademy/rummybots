@@ -179,6 +179,11 @@ class GameEngine:
         self._drawn_from_discard = None
         bots = [bot0, bot1]
 
+        # Notify bots of game start
+        for i, bot in enumerate(bots):
+            if hasattr(bot, "on_game_start"):
+                bot.on_game_start(i, self.state.get_player_view(i))
+
         while self.state.phase != GamePhase.END:
             player = self.state.current_player
             bot = bots[player]
@@ -206,6 +211,11 @@ class GameEngine:
                 view = self.state.get_player_view(player)
                 if bot.knock_decision(view):
                     return self._execute_knock(player)
+
+            # Notify bots of turn end
+            for i, bot in enumerate(bots):
+                if hasattr(bot, "on_turn_end"):
+                    bot.on_turn_end(self.state.get_player_view(i))
 
             # Switch to other player
             self.state.current_player = 1 - player
