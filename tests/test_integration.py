@@ -5,12 +5,16 @@ tournament start to results, edge cases, performance, and
 validation that the system behaves correctly.
 """
 
+import inspect
+import os
 import random
+import signal
 import time
 import unittest
 
 from engine.card import Card, Deck, Rank, Suit
 from engine.game import (
+    BotTimeoutError,
     DrawChoice,
     GameEngine,
     GamePhase,
@@ -488,6 +492,239 @@ class TestFinalValidation(unittest.TestCase):
         self.assertIn("IntermediateBot", names)
         # Template excluded by default
         self.assertNotIn("StudentBot", names)
+
+
+# --- Anti-Cheat Tests ---
+
+class TestAntiCheat(unittest.TestCase):
+    """Verify that common cheating strategies are blocked."""
+
+    def test_rng_manipulation_blocked(self):
+        """A bot that seeds the global random cannot control the deal.
+
+        The engine uses a dedicated random.Random instance, so calling
+        random.seed() in a bot method should have no effect on the cards
+        dealt.
+        """
+        class RNGCheaterBot(Bot):
+            """Bot that tries to seed global random for predictable deals."""
+            def __init__(self):
+                self.hands_seen = []
+
+            @property
+            def name(self):
+                return "RNGCheater"
+
+            def draw_decision(self, view):
+                # Try to manipulate the global RNG
+                random.seed(12345)
+                self.hands_seen.append(sorted(view.hand))
+                return "deck"
+
+            def discard_decision(self, view):
+                random.seed(12345)
+                return view.hand[-1]
+
+            def knock_decision(self, view):
+                return can_knock(view.hand)
+
+        # Run several games with different engine seeds
+        # If RNG manipulation worked, the cheater would see the same
+        # hand every game. With isolated RNG, hands should differ.
+        engine = GameEngine()
+        cheater = RNGCheaterBot()
+        opponent = BasicBot()
+        hands = set()
+        for seed in range(10):
+            cheater.hands_seen = []
+            game_rng = random.Random(seed)
+            engine.play_game(cheater, opponent, rng=game_rng)
+            if cheater.hands_seen:
+                hands.add(tuple(cheater.hands_seen[0]))
+
+        # With 10 different seeds, we should see multiple distinct hands
+        self.assertGreater(
+            len(hands), 1,
+            "RNG manipulation should not produce identical hands across games"
+        )
+
+    def test_frame_snooping_blocked(self):
+        """The immediate caller frame of bot methods should not contain engine state.
+
+        Because bot methods are called via a standalone trampoline function
+        (_call_bot_method), the GameEngine's `self` is not in the direct
+        caller's frame (f_back). This prevents the simplest form of
+        frame introspection from accessing game internals.
+        """
+        class FrameSnooperBot(Bot):
+            """Bot that checks the immediate caller frame for engine state."""
+            def __init__(self):
+                self.found_engine_in_caller = False
+
+            @property
+            def name(self):
+                return "FrameSnooper"
+
+            def _check_caller_frame(self):
+                """Check the immediate caller frames for engine references."""
+                frame = inspect.currentframe()
+                try:
+                    # Walk up: _check_caller_frame -> draw_decision -> _call_bot_method
+                    caller = frame.f_back  # draw_decision (self is the bot, OK)
+                    if caller:
+                        caller = caller.f_back  # _call_bot_method (trampoline)
+                    if caller:
+                        local_vars = caller.f_locals
+                        for val in local_vars.values():
+                            if hasattr(val, '_execute_draw') or hasattr(val, 'state'):
+                                self.found_engine_in_caller = True
+                finally:
+                    del frame
+
+            def draw_decision(self, view):
+                self._check_caller_frame()
+                return "deck"
+
+            def discard_decision(self, view):
+                return view.hand[-1]
+
+            def knock_decision(self, view):
+                return can_knock(view.hand)
+
+        engine = GameEngine()
+        snooper = FrameSnooperBot()
+        game_rng = random.Random(42)
+        engine.play_game(snooper, BasicBot(), rng=game_rng)
+
+        self.assertFalse(
+            snooper.found_engine_in_caller,
+            "Trampoline's caller frame should not contain GameEngine"
+        )
+
+    @unittest.skipIf(
+        not hasattr(signal, "SIGALRM") or os.name == "nt",
+        "Timeout tests require Unix signal support"
+    )
+    def test_slow_bot_times_out(self):
+        """A bot that infinite-loops should be timed out and raise an error."""
+        class InfiniteLoopBot(Bot):
+            @property
+            def name(self):
+                return "InfiniteLooper"
+
+            def draw_decision(self, view):
+                while True:
+                    pass  # infinite loop
+
+            def discard_decision(self, view):
+                return view.hand[0]
+
+            def knock_decision(self, view):
+                return False
+
+        engine = GameEngine()
+        game_rng = random.Random(42)
+        with self.assertRaises(BotTimeoutError):
+            engine.play_game(InfiniteLoopBot(), BasicBot(), rng=game_rng)
+
+    def test_bad_draw_return_type(self):
+        """Bot returning wrong type from draw_decision raises InvalidMoveError."""
+        class BadDrawBot(Bot):
+            @property
+            def name(self):
+                return "BadDrawBot"
+
+            def draw_decision(self, view):
+                return 42  # should be str or DrawChoice
+
+            def discard_decision(self, view):
+                return view.hand[0]
+
+            def knock_decision(self, view):
+                return False
+
+        engine = GameEngine()
+        game_rng = random.Random(42)
+        with self.assertRaises(InvalidMoveError) as ctx:
+            engine.play_game(BadDrawBot(), BasicBot(), rng=game_rng)
+        self.assertIn("draw_decision", str(ctx.exception))
+
+    def test_bad_discard_return_type(self):
+        """Bot returning wrong type from discard_decision raises InvalidMoveError."""
+        class BadDiscardTypeBot(Bot):
+            @property
+            def name(self):
+                return "BadDiscardTypeBot"
+
+            def draw_decision(self, view):
+                return "deck"
+
+            def discard_decision(self, view):
+                return "not a card"  # should be Card
+
+            def knock_decision(self, view):
+                return False
+
+        engine = GameEngine()
+        game_rng = random.Random(42)
+        with self.assertRaises(InvalidMoveError) as ctx:
+            engine.play_game(BadDiscardTypeBot(), BasicBot(), rng=game_rng)
+        self.assertIn("discard_decision", str(ctx.exception))
+
+    def test_bad_knock_return_type(self):
+        """Bot returning wrong type from knock_decision raises InvalidMoveError."""
+        class BadKnockBot(Bot):
+            @property
+            def name(self):
+                return "BadKnockBot"
+
+            def draw_decision(self, view):
+                return "deck"
+
+            def discard_decision(self, view):
+                return best_discard(view.hand)
+
+            def knock_decision(self, view):
+                return "yes"  # should be bool
+
+        engine = GameEngine()
+        # Try multiple seeds since knock_decision is only called when eligible
+        for seed in range(100):
+            game_rng = random.Random(seed)
+            try:
+                engine.play_game(BadKnockBot(), BasicBot(), rng=game_rng)
+            except InvalidMoveError as e:
+                self.assertIn("knock_decision", str(e))
+                return  # Test passed
+        # If we never reached knock phase in 100 games, skip
+        self.skipTest("knock_decision was never called in 100 games")
+
+    def test_cheating_bots_in_tournament(self):
+        """Cheating bots should not crash the tournament — errors are recorded."""
+        class RNGCheater(Bot):
+            @property
+            def name(self):
+                return "RNGCheater"
+            def draw_decision(self, view):
+                random.seed(0)
+                return "deck"
+            def discard_decision(self, view):
+                return view.hand[-1]
+            def knock_decision(self, view):
+                return True
+
+        rankings, matches = run_tournament(
+            [RNGCheater(), BasicBot()],
+            games_per_match=20,
+            seed=42,
+            verbose=False,
+        )
+        # Tournament should complete without crashing
+        self.assertEqual(len(rankings), 2)
+        # All games should complete (no errors from RNG cheating)
+        for match in matches:
+            total = match.bot0_wins + match.bot1_wins + match.draws
+            self.assertEqual(total + len(match.errors), 20)
 
 
 if __name__ == "__main__":

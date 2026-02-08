@@ -1,10 +1,52 @@
 """Game state management and engine for Gin Rummy."""
 
+import os
+import random
+import signal
 from enum import Enum, auto
 from typing import List, Optional
 
 from engine.card import Card, Deck
 from engine import rules
+
+# Timeout in seconds for each bot decision call
+BOT_TIMEOUT_SECONDS = 5
+
+# Whether signal-based timeouts are available (Unix only)
+_HAS_SIGALRM = hasattr(signal, "SIGALRM") and os.name != "nt"
+
+
+class BotTimeoutError(Exception):
+    """Raised when a bot exceeds the allowed time for a decision."""
+    pass
+
+
+def _call_bot_method(method, view, timeout=BOT_TIMEOUT_SECONDS):
+    """Call a bot method with timeout and frame isolation.
+
+    This is a standalone function (not a GameEngine method) so that
+    the engine's ``self`` is NOT in the immediate caller's frame.
+    This prevents bots from using inspect.currentframe().f_back.f_locals
+    to access game internals directly.
+
+    Uses signal.alarm on Unix for zero-overhead timeout enforcement.
+    """
+    if _HAS_SIGALRM:
+        def _timeout_handler(signum, frame):
+            raise BotTimeoutError(
+                f"Bot method {method.__name__} exceeded {timeout}s time limit"
+            )
+        old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
+        signal.alarm(timeout)
+
+    try:
+        result = method(view)
+    finally:
+        if _HAS_SIGALRM:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
+
+    return result
 
 
 class GamePhase(Enum):
@@ -82,9 +124,9 @@ class GameState:
         self.score: int = 0
         self.result_type: Optional[str] = None
 
-    def setup(self, dealer: int = 0) -> None:
+    def setup(self, dealer: int = 0, rng: random.Random = None) -> None:
         """Initialize a new game: shuffle, deal, flip first discard."""
-        self.deck = Deck()
+        self.deck = Deck(rng=rng)
         self.dealer = dealer
         self.hands = [[], []]
         self.discard_pile = []
@@ -161,13 +203,14 @@ class GameEngine:
         self.state = GameState()
         self._drawn_from_discard: Optional[Card] = None
 
-    def play_game(self, bot0, bot1, dealer: int = 0) -> GameResult:
+    def play_game(self, bot0, bot1, dealer: int = 0, rng: random.Random = None) -> GameResult:
         """Run a complete game between two bots.
 
         Args:
             bot0: First bot instance (player 0).
             bot1: Second bot instance (player 1).
             dealer: Which player deals (0 or 1).
+            rng: Dedicated Random instance for shuffling. If None, a new one is created.
 
         Returns:
             GameResult with winner, score, and result type.
@@ -175,7 +218,9 @@ class GameEngine:
         Raises:
             InvalidMoveError: If a bot makes an illegal move.
         """
-        self.state.setup(dealer)
+        if rng is None:
+            rng = random.Random(random.getrandbits(128))
+        self.state.setup(dealer, rng=rng)
         self._drawn_from_discard = None
         bots = [bot0, bot1]
 
@@ -188,14 +233,24 @@ class GameEngine:
             player = self.state.current_player
             bot = bots[player]
 
-            # Draw phase
+            # Draw phase — call via trampoline for frame isolation + timeout
             view = self.state.get_player_view(player)
-            draw_choice = bot.draw_decision(view)
+            draw_choice = _call_bot_method(bot.draw_decision, view)
+            if not isinstance(draw_choice, (str, DrawChoice)):
+                raise InvalidMoveError(
+                    f"draw_decision() must return str or DrawChoice, "
+                    f"got {type(draw_choice).__name__}"
+                )
             self._execute_draw(player, draw_choice)
 
             # Discard phase
             view = self.state.get_player_view(player)
-            discard_card = bot.discard_decision(view)
+            discard_card = _call_bot_method(bot.discard_decision, view)
+            if not isinstance(discard_card, Card):
+                raise InvalidMoveError(
+                    f"discard_decision() must return a Card, "
+                    f"got {type(discard_card).__name__}"
+                )
             self._execute_discard(player, discard_card)
 
             # Check for deck exhaustion
@@ -209,13 +264,19 @@ class GameEngine:
             if rules.can_knock(self.state.hands[player]):
                 self.state.phase = GamePhase.KNOCK
                 view = self.state.get_player_view(player)
-                if bot.knock_decision(view):
+                knock = _call_bot_method(bot.knock_decision, view)
+                if not isinstance(knock, bool):
+                    raise InvalidMoveError(
+                        f"knock_decision() must return bool, "
+                        f"got {type(knock).__name__}"
+                    )
+                if knock:
                     return self._execute_knock(player)
 
             # Notify bots of turn end
-            for i, bot in enumerate(bots):
-                if hasattr(bot, "on_turn_end"):
-                    bot.on_turn_end(self.state.get_player_view(i))
+            for i, b in enumerate(bots):
+                if hasattr(b, "on_turn_end"):
+                    b.on_turn_end(self.state.get_player_view(i))
 
             # Switch to other player
             self.state.current_player = 1 - player

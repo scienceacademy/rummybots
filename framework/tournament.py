@@ -161,8 +161,13 @@ def run_match(
     engine = GameEngine()
 
     for game_num in range(num_games):
+        # Create a dedicated RNG for the engine, isolated from global random.
+        # Also seed global random for bot determinism (bots may use random module).
         if seed is not None:
+            game_rng = random.Random(seed + game_num)
             random.seed(seed + game_num)
+        else:
+            game_rng = random.Random()
 
         # Alternate dealer each game
         dealer = game_num % 2
@@ -175,7 +180,7 @@ def run_match(
             bot0_idx = 1
 
         try:
-            game_result = engine.play_game(p0, p1, dealer=0)
+            game_result = engine.play_game(p0, p1, dealer=0, rng=game_rng)
             result.record_game(game_result, bot0_idx=bot0_idx)
         except (InvalidMoveError, Exception) as e:
             result.record_error(

@@ -95,7 +95,8 @@ class Card:
 class Deck:
     """A standard 52-card deck with shuffle, deal, and draw operations."""
 
-    def __init__(self):
+    def __init__(self, rng: random.Random = None):
+        self._rng = rng or random.Random()
         self._cards: List[Card] = [
             Card(rank, suit) for suit in Suit for rank in Rank
         ]
@@ -103,7 +104,7 @@ class Deck:
 
     def shuffle(self) -> None:
         """Shuffle the deck in place."""
-        random.shuffle(self._cards)
+        self._rng.shuffle(self._cards)
 
     def draw(self) -> Card:
         """Draw and return the top card from the deck.
