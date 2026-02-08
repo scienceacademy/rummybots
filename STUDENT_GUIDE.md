@@ -7,16 +7,16 @@ This guide walks you through creating a bot for the Gin Rummy tournament.
 Copy the template to a new file:
 
 ```bash
-cp bots/student_bot_template.py bots/my_bot.py
+cp bots/student_bot_template.py bots/bot_<name>.py
 ```
 
-Open `bots/my_bot.py` and rename the class:
+Open `bots/bot_<name>.py` and rename the class with your bot's name:
 
 ```python
 class MyBot(Bot):
     @property
     def name(self):
-        return "My Bot"  # Give your bot a name!
+        return "MyBot"  # Give your bot a name!
 ```
 
 ## Step 2: Understand the Game View
@@ -169,6 +169,38 @@ python3 main.py --games 20
 # Reproducible results
 python3 main.py --games 50 --seed 42
 ```
+
+## Step 7: Submit Your Bot
+
+When your bot is ready for the tournament:
+
+1. **Make sure your bot file is in the `bots/` directory** and has a unique filename (e.g., `bots/bot_<name>.py`).
+
+2. **Verify your bot class**:
+   - It subclasses `Bot` from `framework.bot_interface`
+   - It has a unique `name` property (this is what appears in the rankings)
+   - All three decision methods are implemented: `draw_decision`, `discard_decision`, `knock_decision`
+
+3. **Run a final check** to make sure your bot works without errors:
+   ```bash
+   python3 main.py --games 50 --seed 42
+   ```
+   If you see errors next to your bot's name, fix them before submitting.
+
+4. **Submit with submit50** Only your bot file will be submitted (e.g., `bot_<name>.py`). Do not modify any other files in the project.
+
+```bash
+submit50 scienceacademy/problems/2025ap/rummybots
+```
+
+### Submission Checklist
+
+- [ ] Bot file is named something other than `student_bot_template.py`
+- [ ] Bot class has a unique `name`
+- [ ] Bot runs in the tournament without errors
+- [ ] Bot does not import anything outside the standard library, `engine`, or `framework`
+
+---
 
 ## Strategy Ideas
 

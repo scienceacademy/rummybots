@@ -1,7 +1,7 @@
 """Student Bot Template — start building your bot here!
 
 Instructions:
-1. Rename this file to something like "my_bot.py"
+1. Rename this file to something like "bot_<name>.py"
 2. Rename the class to something like "MyBot"
 3. Implement your strategy in the three required methods
 4. Test your bot by running it against the sample bots
