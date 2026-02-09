@@ -344,5 +344,65 @@ class TestScoring(unittest.TestCase):
         self.assertEqual(points, -25)
 
 
+class TestMeldPerformance(unittest.TestCase):
+    """Tests for meld algorithm performance."""
+
+    def test_complex_hand_meld_performance(self):
+        """Test meld finding with many overlapping possibilities."""
+        # Worst case: many cards that could be in multiple melds
+        # E.g., 3♥ 4♥ 5♥ 6♥ 7♥ 8♥ (many run combinations)
+        #       3♠ 3♦ 3♣ (set)
+        complex_hand = [
+            c("3", "H"), c("4", "H"), c("5", "H"),
+            c("6", "H"), c("7", "H"), c("8", "H"),
+            c("3", "S"), c("3", "D"), c("3", "C"),
+            c("K", "S")  # Deadwood
+        ]
+
+        import time
+        start = time.time()
+        melds, deadwood = find_best_melds(complex_hand)
+        elapsed = time.time() - start
+
+        # Should complete quickly even for complex hands
+        self.assertLess(elapsed, 1.0,
+                       f"Meld finding took {elapsed:.2f}s, expected <1s")
+        # Should find good melds
+        dw = calculate_deadwood(complex_hand)
+        self.assertLessEqual(dw, 10,
+                            f"Deadwood {dw} should be ≤10 with good meld finding")
+
+    def test_memoization_effectiveness(self):
+        """Test that memoization improves performance on repeated calls."""
+        hand = [
+            c("3", "H"), c("4", "H"), c("5", "H"),
+            c("6", "H"), c("7", "H"), c("3", "S"),
+            c("3", "D"), c("K", "S"), c("Q", "D"),
+            c("J", "C")
+        ]
+
+        import time
+        # First call (cache miss)
+        start = time.time()
+        result1 = find_best_melds(hand)
+        first_time = time.time() - start
+
+        # Second call (cache hit)
+        start = time.time()
+        result2 = find_best_melds(hand)
+        second_time = time.time() - start
+
+        # Results should be identical
+        self.assertEqual(len(result1[0]), len(result2[0]))
+        self.assertEqual(len(result1[1]), len(result2[1]))
+
+        # Second call should be much faster (at least 2x)
+        # Note: This might be flaky on very fast systems, but demonstrates caching
+        if first_time > 0.001:  # Only check if first call was measurable
+            self.assertLess(second_time, first_time * 0.5,
+                           f"Cache should speed up repeated calls: "
+                           f"first={first_time:.4f}s, second={second_time:.4f}s")
+
+
 if __name__ == "__main__":
     unittest.main()

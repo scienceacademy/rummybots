@@ -180,7 +180,7 @@ def run_match(
             bot0_idx = 1
 
         try:
-            game_result = engine.play_game(p0, p1, dealer=0, rng=game_rng)
+            game_result = engine.play_game(p0, p1, dealer=dealer, rng=game_rng)
             result.record_game(game_result, bot0_idx=bot0_idx)
         except (InvalidMoveError, Exception) as e:
             result.record_error(

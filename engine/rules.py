@@ -1,5 +1,7 @@
 """Gin Rummy rule validation, meld detection, and scoring."""
 
+from collections import defaultdict
+from functools import lru_cache
 from itertools import combinations
 from typing import List, Tuple
 
@@ -40,7 +42,6 @@ def is_valid_meld(cards: List[Card]) -> bool:
 
 def find_sets(hand: List[Card]) -> List[Meld]:
     """Find all possible sets (3-4 of same rank) in a hand."""
-    from collections import defaultdict
     by_rank = defaultdict(list)
     for card in hand:
         by_rank[card.rank].append(card)
@@ -59,7 +60,6 @@ def find_sets(hand: List[Card]) -> List[Meld]:
 
 def find_runs(hand: List[Card]) -> List[Meld]:
     """Find all possible runs (3+ consecutive same suit) in a hand."""
-    from collections import defaultdict
     by_suit = defaultdict(list)
     for card in hand:
         by_suit[card.suit].append(card)
@@ -118,16 +118,21 @@ def _find_best_melds_recursive(
             )
 
 
-def find_best_melds(hand: List[Card]) -> Tuple[List[Meld], List[Card]]:
-    """Find the optimal meld arrangement that minimizes deadwood.
+@lru_cache(maxsize=1024)
+def _find_best_melds_cached(hand_tuple: Tuple[Card, ...]) -> Tuple[Tuple[Tuple[Card, ...], ...], Tuple[Card, ...]]:
+    """Cached version of find_best_melds using tuples for hashability.
+
+    Args:
+        hand_tuple: Tuple of cards (sorted for cache consistency)
 
     Returns:
-        A tuple of (melds, unmelded_cards) where melds is the list
-        of melds and unmelded_cards are the leftover cards.
+        Tuple of (melds_tuple, unmelded_tuple) where melds_tuple is a tuple
+        of meld tuples and unmelded_tuple is a tuple of unmelded cards.
     """
+    hand = list(hand_tuple)
     all_melds = find_all_melds(hand)
     if not all_melds:
-        return [], list(hand)
+        return tuple(), hand_tuple
 
     best: List[List[Meld]] = [[]]
     best_deadwood = [sum(c.deadwood_value for c in hand)]
@@ -141,7 +146,34 @@ def find_best_melds(hand: List[Card]) -> Tuple[List[Meld], List[Card]]:
         melded_cards.update(meld)
     unmelded = [c for c in hand if c not in melded_cards]
 
-    return best[0], unmelded
+    # Convert to tuples for return
+    melds_tuple = tuple(tuple(meld) for meld in best[0])
+    unmelded_tuple = tuple(unmelded)
+
+    return melds_tuple, unmelded_tuple
+
+
+def find_best_melds(hand: List[Card]) -> Tuple[List[Meld], List[Card]]:
+    """Find the optimal meld arrangement that minimizes deadwood.
+
+    Returns:
+        A tuple of (melds, unmelded_cards) where melds is the list
+        of melds and unmelded_cards are the leftover cards.
+    """
+    if not hand:
+        return [], []
+
+    # Convert to sorted tuple for cache lookup
+    hand_tuple = tuple(sorted(hand, key=lambda c: (c.suit.value, c.rank.value)))
+
+    # Get cached result
+    melds_tuple, unmelded_tuple = _find_best_melds_cached(hand_tuple)
+
+    # Convert back to lists
+    melds = [list(meld) for meld in melds_tuple]
+    unmelded = list(unmelded_tuple)
+
+    return melds, unmelded
 
 
 # --- Scoring ---

@@ -34,7 +34,13 @@ def _call_bot_method(method, view, timeout=BOT_TIMEOUT_SECONDS):
     if _HAS_SIGALRM:
         def _timeout_handler(signum, frame):
             raise BotTimeoutError(
-                f"Bot method {method.__name__} exceeded {timeout}s time limit"
+                f"Bot decision method timed out:\n"
+                f"  Method: {method.__name__}()\n"
+                f"  Time limit: {timeout} seconds\n"
+                f"  Hint: Your bot is taking too long. Check for:\n"
+                f"    - Infinite loops\n"
+                f"    - Expensive calculations (use utilities.calculate_deadwood instead of reimplementing)\n"
+                f"    - Nested loops that don't terminate"
             )
         old_handler = signal.signal(signal.SIGALRM, _timeout_handler)
         signal.alarm(timeout)
@@ -238,8 +244,10 @@ class GameEngine:
             draw_choice = _call_bot_method(bot.draw_decision, view)
             if not isinstance(draw_choice, (str, DrawChoice)):
                 raise InvalidMoveError(
-                    f"draw_decision() must return str or DrawChoice, "
-                    f"got {type(draw_choice).__name__}"
+                    f"Bot '{bot.name}' returned invalid type from draw_decision():\n"
+                    f"  Expected: str (\"deck\" or \"discard\") or DrawChoice enum\n"
+                    f"  Got: {type(draw_choice).__name__} = {repr(draw_choice)}\n"
+                    f"  Hint: Return a string \"deck\" or \"discard\" (lowercase)"
                 )
             self._execute_draw(player, draw_choice)
 
@@ -248,8 +256,10 @@ class GameEngine:
             discard_card = _call_bot_method(bot.discard_decision, view)
             if not isinstance(discard_card, Card):
                 raise InvalidMoveError(
-                    f"discard_decision() must return a Card, "
-                    f"got {type(discard_card).__name__}"
+                    f"Bot '{bot.name}' returned invalid type from discard_decision():\n"
+                    f"  Expected: Card object from engine.card.Card\n"
+                    f"  Got: {type(discard_card).__name__} = {repr(discard_card)}\n"
+                    f"  Hint: Return one of the Card objects from view.hand"
                 )
             self._execute_discard(player, discard_card)
 
@@ -267,8 +277,10 @@ class GameEngine:
                 knock = _call_bot_method(bot.knock_decision, view)
                 if not isinstance(knock, bool):
                     raise InvalidMoveError(
-                        f"knock_decision() must return bool, "
-                        f"got {type(knock).__name__}"
+                        f"Bot '{bot.name}' returned invalid type from knock_decision():\n"
+                        f"  Expected: bool (True or False)\n"
+                        f"  Got: {type(knock).__name__} = {repr(knock)}\n"
+                        f"  Hint: Return True to knock, False to continue playing"
                     )
                 if knock:
                     return self._execute_knock(player)
@@ -297,8 +309,10 @@ class GameEngine:
                 choice = DrawChoice(choice.lower())
             except ValueError:
                 raise InvalidMoveError(
-                    f"Invalid draw choice: '{choice}'. "
-                    "Use 'deck' or 'discard'."
+                    f"Bot '{self.state.current_player}' invalid draw choice:\n"
+                    f"  Expected: \"deck\" or \"discard\" (lowercase)\n"
+                    f"  Got: \"{choice}\"\n"
+                    f"  Hint: draw_decision() must return exactly \"deck\" or \"discard\""
                 )
         elif not isinstance(choice, DrawChoice):
             raise InvalidMoveError(
@@ -333,13 +347,23 @@ class GameEngine:
                 f"have {len(self.state.hands[player])}"
             )
         if card not in self.state.hands[player]:
-            raise InvalidMoveError(f"Card {card} is not in your hand")
+            hand_str = ", ".join(str(c) for c in self.state.hands[player])
+            raise InvalidMoveError(
+                f"Bot tried to discard card not in hand:\n"
+                f"  Attempted to discard: {card}\n"
+                f"  Your hand: [{hand_str}]\n"
+                f"  Hint: Make sure you return a Card from view.hand"
+            )
         if (
             self._drawn_from_discard is not None
             and card == self._drawn_from_discard
         ):
             raise InvalidMoveError(
-                "Cannot discard the card just drawn from the discard pile"
+                f"Bot tried to discard card just drawn from discard pile:\n"
+                f"  Drew from discard: {self._drawn_from_discard}\n"
+                f"  Tried to discard: {card}\n"
+                f"  Rule: You cannot immediately discard the card you just picked\n"
+                f"  Hint: Choose a different card from your hand to discard"
             )
 
         self.state.hands[player].remove(card)

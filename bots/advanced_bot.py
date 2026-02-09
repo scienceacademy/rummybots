@@ -16,8 +16,11 @@ from engine.rules import find_best_melds
 from framework.bot_interface import Bot
 from framework.utilities import (
     calculate_deadwood,
+    count_meld_outs,
     deadwood_after_discard,
     evaluate_discard_draw,
+    is_provably_safe_discard,
+    score_discard_safety,
 )
 
 ALL_CARDS = frozenset(
@@ -60,113 +63,8 @@ class AdvancedBot(Bot):
         self._prev_discard_top = view.top_of_discard
         self._prev_discard_len = len(view.discard_pile)
 
-    # -- Helpers --
-
-    def _is_safe_discard(self, card: Card, hand: List[Card]) -> bool:
-        """Check if opponent CANNOT use this card to complete any meld.
-
-        A card is safe if:
-        - Set-safe: 2+ of the other 3 same-rank cards are accounted for
-          (in our hand or seen), so opponent can't form a set of 3.
-        - Run-safe: for every possible 3-card run containing this card,
-          at least one other required card is accounted for.
-        """
-        accounted = self._seen_cards | set(hand)
-
-        other_same_rank = sum(
-            1 for c in accounted
-            if c.rank == card.rank and c != card
-        )
-        set_safe = other_same_rank >= 2
-
-        cv = card.rank.value
-        run_safe = True
-        for start in (cv - 2, cv - 1, cv):
-            vals = [start, start + 1, start + 2]
-            if vals[0] < 1 or vals[2] > 13:
-                continue
-            other_vals = [v for v in vals if v != cv]
-            opponent_can_have_all = True
-            for v in other_vals:
-                if Card(Rank(v), card.suit) in accounted:
-                    opponent_can_have_all = False
-                    break
-            if opponent_can_have_all:
-                run_safe = False
-                break
-
-        return set_safe and run_safe
-
-    def _count_outs(self, card: Card, hand: List[Card]) -> int:
-        """Count unseen cards that would complete a meld involving *card*."""
-        unseen = ALL_CARDS - self._seen_cards - set(hand)
-        others = [c for c in hand if c != card]
-        outs: Set[Card] = set()
-
-        # Set outs: have a pair, need a third
-        same_rank = sum(1 for c in others if c.rank == card.rank)
-        if same_rank == 1:
-            for c in unseen:
-                if c.rank == card.rank:
-                    outs.add(c)
-
-        # Run outs
-        cv = card.rank.value
-        suit_vals = {c.rank.value for c in others if c.suit == card.suit}
-
-        has_m1 = (cv - 1) in suit_vals
-        has_p1 = (cv + 1) in suit_vals
-        has_m2 = (cv - 2) in suit_vals
-        has_p2 = (cv + 2) in suit_vals
-
-        if has_m1:
-            for v in (cv - 2, cv + 1):
-                if 1 <= v <= 13:
-                    c = Card(Rank(v), card.suit)
-                    if c in unseen:
-                        outs.add(c)
-
-        if has_p1:
-            for v in (cv - 1, cv + 2):
-                if 1 <= v <= 13:
-                    c = Card(Rank(v), card.suit)
-                    if c in unseen:
-                        outs.add(c)
-
-        if has_m2 and not has_m1:
-            v = cv - 1
-            if 1 <= v <= 13:
-                c = Card(Rank(v), card.suit)
-                if c in unseen:
-                    outs.add(c)
-
-        if has_p2 and not has_p1:
-            v = cv + 1
-            if 1 <= v <= 13:
-                c = Card(Rank(v), card.suit)
-                if c in unseen:
-                    outs.add(c)
-
-        return len(outs)
-
-    def _safety_score(self, card: Card) -> float:
-        """How safe is discarding this card? Higher = safer."""
-        safety = 0.0
-
-        for pick in self._opponent_picks:
-            if pick.rank == card.rank:
-                safety -= 5
-            if (pick.suit == card.suit
-                    and abs(pick.rank.value - card.rank.value) <= 2):
-                safety -= 3
-
-        seen_same_rank = sum(
-            1 for c in self._seen_cards
-            if c.rank == card.rank and c != card
-        )
-        safety += seen_same_rank * 1.5
-
-        return safety
+    # -- Helper methods moved to framework.utilities --
+    # is_provably_safe_discard(), count_meld_outs(), score_discard_safety()
 
     # --- Draw ---
 
@@ -220,15 +118,15 @@ class AdvancedBot(Bot):
                 score -= 50
             else:
                 # Keep cards with meld-completion potential
-                outs = self._count_outs(card, hand)
+                outs = count_meld_outs(card, hand, self._seen_cards)
                 score -= outs * 8
 
             # Bonus for provably safe discards (can't help opponent)
-            if card not in melded_cards and self._is_safe_discard(card, hand):
+            if card not in melded_cards and is_provably_safe_discard(card, self._seen_cards):
                 score += 20
 
             # Avoid feeding opponent cards they've been picking up
-            score += self._safety_score(card) * 4
+            score += score_discard_safety(card, self._opponent_picks, self._seen_cards) * 4
 
             # Tiebreaker: prefer discarding higher deadwood
             score += card.deadwood_value * 0.3

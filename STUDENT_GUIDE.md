@@ -137,6 +137,71 @@ for card in get_unmelded_cards(view.hand):
     print(f"{card}: costs {cost} deadwood points")
 ```
 
+### Advanced Utilities
+
+For more sophisticated strategies, use these advanced utilities:
+
+```python
+from framework.utilities import (
+    count_meld_outs,           # How many unseen cards complete melds with this card
+    is_provably_safe_discard,  # True if opponent can't use this card in any meld
+    score_discard_safety,      # Rate how safe it is to discard (0=dangerous, 1=safe)
+    calculate_hand_strength,   # Overall hand strength (0.0=weak, 1.0=gin)
+    count_near_melds,          # Count cards one away from forming melds
+)
+```
+
+**count_meld_outs(card, hand, seen_cards)**
+Counts how many unseen cards would complete a meld with this card.
+Useful for: Evaluating which cards have the most improvement potential.
+
+```python
+seen = set(view.hand + view.discard_pile)
+for card in view.hand:
+    outs = count_meld_outs(card, view.hand, seen)
+    # Higher outs = more valuable to keep
+```
+
+**is_provably_safe_discard(card, seen_cards)**
+Returns True if opponent cannot use this card in any meld (dead card).
+Useful for: Safe discarding without giving opponent advantage.
+
+```python
+seen = set(view.hand + view.discard_pile)
+safe_cards = [c for c in view.hand if is_provably_safe_discard(c, seen)]
+# Discard safe cards first
+```
+
+**score_discard_safety(card, opponent_picks, seen_cards)**
+Rates safety of discarding a card (higher = safer, negative = dangerous).
+Useful for: Choosing between multiple discard options.
+
+```python
+seen = set(view.hand + view.discard_pile)
+# Find safest discard
+safest = max(view.hand, key=lambda c:
+    score_discard_safety(c, view.discard_pile, seen))
+```
+
+**calculate_hand_strength(hand)**
+Evaluates overall hand strength from 0.0 (weak) to 1.0 (gin).
+Useful for: Knock decisions and strategy adjustments.
+
+```python
+strength = calculate_hand_strength(view.hand)
+if strength > 0.7:
+    # Strong hand, might knock early
+```
+
+**count_near_melds(hand)**
+Counts cards one away from forming melds (pairs, consecutive cards).
+Useful for: Understanding hand potential.
+
+```python
+near_melds = count_near_melds(view.hand)
+# More near-melds = more improvement potential
+```
+
 ## Step 5: Track Game State (Optional)
 
 Override the lifecycle hooks to track information across turns:
@@ -169,6 +234,59 @@ python3 main.py --games 20
 # Reproducible results
 python3 main.py --games 50 --seed 42
 ```
+
+### Debugging Your Bot
+
+Before submitting, use the validation tool to catch common errors:
+
+```bash
+python3 scripts/validate_bot.py bots/my_bot.py
+```
+
+The validator checks:
+- ✓ File exists and is readable
+- ✓ Bot inherits from framework.bot_interface.Bot
+- ✓ Bot has unique name property
+- ✓ All three methods implemented
+- ✓ Bot handles empty discard pile (first turn)
+- ✓ Bot doesn't crash on sample hands
+- ✓ Bot returns correct types (str/"deck"/"discard", Card, bool)
+- ✓ Bot completes 10 games in <30 seconds
+- ⚠ Bot performs better than RandomBot
+
+### Common Errors and Solutions
+
+**Error: "Invalid type from draw_decision()"**
+- Make sure draw_decision() returns a string, not DrawChoice enum
+- Return exactly "deck" or "discard" (lowercase)
+
+**Error: "Card not in your hand"**
+- You tried to discard a card you don't have
+- Common cause: discarding the card you just drew from discard pile
+- Solution: Return a Card object that's actually in view.hand
+
+**Error: "Cannot discard card just drawn from discard pile"**
+- Gin Rummy rule: you can't immediately discard what you just picked up
+- Solution: Choose a different card to discard
+
+**Error: "Bot timeout"**
+- Your bot is taking too long (>5 seconds per decision)
+- Check for infinite loops or expensive calculations
+- Use utilities.calculate_deadwood() instead of reimplementing meld finding
+- Avoid nested loops that don't terminate
+
+### Print Debugging
+
+Print statements work during local testing:
+
+```python
+def discard_decision(self, view):
+    print(f"My hand: {view.hand}")
+    print(f"Deadwood: {calculate_deadwood(view.hand)}")
+    # ... your logic
+```
+
+Note: Prints are suppressed during tournaments.
 
 ## Step 7: Submit Your Bot
 

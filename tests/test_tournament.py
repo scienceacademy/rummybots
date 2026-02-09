@@ -189,6 +189,27 @@ class TestRunMatch(unittest.TestCase):
         # Just verify it completes without error
         self.assertEqual(result.games_played, 20)
 
+    def test_dealer_alternates_in_match(self):
+        """Verify dealer alternates between 0 and 1 across games."""
+        from unittest.mock import patch
+        from engine.game import GameEngine
+
+        dealers_seen = []
+        original_play_game = GameEngine.play_game
+
+        def capture_dealer(self, bot0, bot1, dealer=0, rng=None):
+            dealers_seen.append(dealer)
+            return original_play_game(self, bot0, bot1, dealer=dealer, rng=rng)
+
+        # Patch play_game to capture dealer parameter
+        with patch.object(GameEngine, 'play_game', capture_dealer):
+            run_match(BasicBot(), BasicBot(), num_games=10, seed=42)
+
+        # Verify alternation: [0, 1, 0, 1, 0, 1, ...]
+        expected = [i % 2 for i in range(10)]
+        self.assertEqual(dealers_seen, expected,
+                        f"Expected dealer alternation {expected}, got {dealers_seen}")
+
 
 # --- run_tournament Tests ---
 
