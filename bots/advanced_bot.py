@@ -1,11 +1,11 @@
 """AdvancedBot — a strong Gin Rummy bot with multi-factor strategy.
 
 Key advantages over simpler bots:
-- Meld-aware draw: always takes from discard when it completes a meld
+- Aggressive knocking: knocks whenever eligible, capturing games before
+  opponents can improve (the single biggest edge)
+- Dead-card detection: identifies provably safe discards via card counting
+- Probability-based evaluation: counts live outs for meld completion
 - Defensive discarding: tracks opponent picks, avoids feeding them cards
-- Near-meld preservation: keeps pairs and partial runs with live outs
-- Card counting: uses seen cards to evaluate safety and meld potential
-- Conservative knock: avoids undercuts by waiting for low deadwood
 """
 
 from typing import List, Optional, Set
@@ -49,11 +49,124 @@ class AdvancedBot(Bot):
     def on_turn_end(self, view: PlayerView) -> None:
         self._seen_cards.update(view.hand)
         self._seen_cards.update(view.discard_pile)
-        if len(view.discard_pile) < self._prev_discard_len:
-            if self._prev_discard_top is not None:
-                self._opponent_picks.append(self._prev_discard_top)
+
+        if not view.is_my_turn:
+            # Opponent's turn just ended.
+            # If pile didn't grow, opponent drew from discard.
+            if len(view.discard_pile) <= self._prev_discard_len:
+                if self._prev_discard_top is not None:
+                    self._opponent_picks.append(self._prev_discard_top)
+
         self._prev_discard_top = view.top_of_discard
         self._prev_discard_len = len(view.discard_pile)
+
+    # -- Helpers --
+
+    def _is_safe_discard(self, card: Card, hand: List[Card]) -> bool:
+        """Check if opponent CANNOT use this card to complete any meld.
+
+        A card is safe if:
+        - Set-safe: 2+ of the other 3 same-rank cards are accounted for
+          (in our hand or seen), so opponent can't form a set of 3.
+        - Run-safe: for every possible 3-card run containing this card,
+          at least one other required card is accounted for.
+        """
+        accounted = self._seen_cards | set(hand)
+
+        other_same_rank = sum(
+            1 for c in accounted
+            if c.rank == card.rank and c != card
+        )
+        set_safe = other_same_rank >= 2
+
+        cv = card.rank.value
+        run_safe = True
+        for start in (cv - 2, cv - 1, cv):
+            vals = [start, start + 1, start + 2]
+            if vals[0] < 1 or vals[2] > 13:
+                continue
+            other_vals = [v for v in vals if v != cv]
+            opponent_can_have_all = True
+            for v in other_vals:
+                if Card(Rank(v), card.suit) in accounted:
+                    opponent_can_have_all = False
+                    break
+            if opponent_can_have_all:
+                run_safe = False
+                break
+
+        return set_safe and run_safe
+
+    def _count_outs(self, card: Card, hand: List[Card]) -> int:
+        """Count unseen cards that would complete a meld involving *card*."""
+        unseen = ALL_CARDS - self._seen_cards - set(hand)
+        others = [c for c in hand if c != card]
+        outs: Set[Card] = set()
+
+        # Set outs: have a pair, need a third
+        same_rank = sum(1 for c in others if c.rank == card.rank)
+        if same_rank == 1:
+            for c in unseen:
+                if c.rank == card.rank:
+                    outs.add(c)
+
+        # Run outs
+        cv = card.rank.value
+        suit_vals = {c.rank.value for c in others if c.suit == card.suit}
+
+        has_m1 = (cv - 1) in suit_vals
+        has_p1 = (cv + 1) in suit_vals
+        has_m2 = (cv - 2) in suit_vals
+        has_p2 = (cv + 2) in suit_vals
+
+        if has_m1:
+            for v in (cv - 2, cv + 1):
+                if 1 <= v <= 13:
+                    c = Card(Rank(v), card.suit)
+                    if c in unseen:
+                        outs.add(c)
+
+        if has_p1:
+            for v in (cv - 1, cv + 2):
+                if 1 <= v <= 13:
+                    c = Card(Rank(v), card.suit)
+                    if c in unseen:
+                        outs.add(c)
+
+        if has_m2 and not has_m1:
+            v = cv - 1
+            if 1 <= v <= 13:
+                c = Card(Rank(v), card.suit)
+                if c in unseen:
+                    outs.add(c)
+
+        if has_p2 and not has_p1:
+            v = cv + 1
+            if 1 <= v <= 13:
+                c = Card(Rank(v), card.suit)
+                if c in unseen:
+                    outs.add(c)
+
+        return len(outs)
+
+    def _safety_score(self, card: Card) -> float:
+        """How safe is discarding this card? Higher = safer."""
+        safety = 0.0
+
+        for pick in self._opponent_picks:
+            if pick.rank == card.rank:
+                safety -= 5
+            if (pick.suit == card.suit
+                    and abs(pick.rank.value - card.rank.value) <= 2):
+                safety -= 3
+
+        seen_same_rank = sum(
+            1 for c in self._seen_cards
+            if c.rank == card.rank and c != card
+        )
+        safety += seen_same_rank * 1.5
+
+        return safety
 
     # --- Draw ---
 
@@ -66,16 +179,9 @@ class AdvancedBot(Bot):
         hand = view.hand
         current_dw = calculate_deadwood(hand)
 
-        # Always take if it completes a new meld
-        old_melds = len(find_best_melds(hand)[0])
-        new_melds = len(find_best_melds(hand + [discard_card])[0])
-        if new_melds > old_melds:
-            self._drew_from_discard = discard_card
-            return "discard"
-
-        # Take if it significantly improves deadwood
+        # Take if significant deadwood improvement (> 2 points)
         if_take = evaluate_discard_draw(hand, discard_card)
-        if if_take <= current_dw - 2:
+        if if_take < current_dw - 2:
             self._drew_from_discard = discard_card
             return "discard"
 
@@ -89,12 +195,11 @@ class AdvancedBot(Bot):
         excluded = self._drew_from_discard
         self._drew_from_discard = None
 
-        melds, unmelded = find_best_melds(hand)
-        melded_cards = set()
+        melds, _ = find_best_melds(hand)
+        melded_cards: Set[Card] = set()
         for m in melds:
             melded_cards.update(m)
 
-        # Score all non-excluded cards
         candidates = [c for c in hand if c != excluded]
         if not candidates:
             candidates = list(hand)
@@ -106,22 +211,27 @@ class AdvancedBot(Bot):
         for card in candidates:
             score = 0.0
 
-            # Deadwood reduction (primary)
+            # Primary: deadwood reduction (higher = more want to discard)
             after_dw = deadwood_after_discard(hand, card)
-            score += (current_dw - after_dw) * 15
+            score += (current_dw - after_dw) * 10
 
             if card in melded_cards:
-                # Heavy penalty for breaking melds
-                score -= 25
+                # Never break melds
+                score -= 50
             else:
-                # Penalty for near-meld cards (keep them)
-                score -= self._near_meld_value(card, hand) * 5
+                # Keep cards with meld-completion potential
+                outs = self._count_outs(card, hand)
+                score -= outs * 8
 
-            # Safety: prefer cards opponent doesn't want
-            score += self._safety_score(card) * 3
+            # Bonus for provably safe discards (can't help opponent)
+            if card not in melded_cards and self._is_safe_discard(card, hand):
+                score += 20
 
-            # Tiebreaker: prefer discarding high deadwood
-            score += card.deadwood_value * 0.5
+            # Avoid feeding opponent cards they've been picking up
+            score += self._safety_score(card) * 4
+
+            # Tiebreaker: prefer discarding higher deadwood
+            score += card.deadwood_value * 0.3
 
             if score > best_score:
                 best_score = score
@@ -129,84 +239,11 @@ class AdvancedBot(Bot):
 
         return best_card
 
-    def _near_meld_value(self, card: Card, hand: List[Card]) -> float:
-        """How valuable is this card for future melds? Higher = keep."""
-        others = [c for c in hand if c != card]
-        value = 0.0
-
-        # Same rank: working toward a set
-        same_rank = sum(1 for c in others if c.rank == card.rank)
-        if same_rank >= 2:
-            value += 4
-        elif same_rank == 1:
-            # Pair: bonus scaled by unseen completing cards
-            needed_suits = (
-                {Suit.CLUBS, Suit.DIAMONDS, Suit.HEARTS, Suit.SPADES}
-                - {card.suit}
-                - {c.suit for c in others if c.rank == card.rank}
-            )
-            available = sum(
-                1 for s in needed_suits
-                if Card(card.rank, s) not in self._seen_cards
-            )
-            value += 1.5 + available * 0.5
-
-        # Same suit neighbors: working toward a run
-        same_suit = [c for c in others if c.suit == card.suit]
-        adjacent = sum(
-            1 for c in same_suit
-            if abs(c.rank.value - card.rank.value) == 1
-        )
-
-        if adjacent >= 2:
-            value += 4  # Middle of 3-card run sequence
-        elif adjacent == 1:
-            value += 2
-            # Bonus if completing card is still unseen
-            for c in same_suit:
-                if abs(c.rank.value - card.rank.value) == 1:
-                    low = min(card.rank.value, c.rank.value)
-                    high = max(card.rank.value, c.rank.value)
-                    for v in [low - 1, high + 1]:
-                        if 1 <= v <= 13:
-                            needed = Card(Rank(v), card.suit)
-                            if needed not in self._seen_cards:
-                                value += 1
-                                break
-                    break
-
-        return value
-
-    def _safety_score(self, card: Card) -> float:
-        """How safe is discarding this card? Higher = safer."""
-        safety = 0.0
-
-        for pick in self._opponent_picks:
-            if pick.rank == card.rank:
-                safety -= 4
-            if (pick.suit == card.suit
-                    and abs(pick.rank.value - card.rank.value) <= 2):
-                safety -= 2
-
-        seen_same_rank = sum(
-            1 for c in self._seen_cards
-            if c.rank == card.rank and c != card
-        )
-        safety += seen_same_rank * 1.5
-
-        return safety
-
     # --- Knock ---
 
     def knock_decision(self, view: PlayerView) -> bool:
-        dw = calculate_deadwood(view.hand)
-
-        if dw == 0:
-            return True
-
-        deck_size = view.deck_size
-
-        if deck_size < 4:
-            return True
-        else:
-            return dw <= 5
+        # Always knock when eligible. Aggressive knocking captures games
+        # before the opponent can improve their hand. The undercut risk
+        # is outweighed by winning games that conservative bots would
+        # pass on.
+        return True
