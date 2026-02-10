@@ -229,10 +229,10 @@ Run a tournament to see how your bot performs:
 
 ```bash
 # Quick test with 20 games per matchup
-python3 main.py --games 20
+python main.py --games 20
 
 # Reproducible results
-python3 main.py --games 50 --seed 42
+python main.py --games 50 --seed 42
 ```
 
 ### Debugging Your Bot
@@ -240,7 +240,7 @@ python3 main.py --games 50 --seed 42
 Before submitting, use the validation tool to catch common errors:
 
 ```bash
-python3 scripts/validate_bot.py bots/my_bot.py
+python scripts/validate_bot.py bots/my_bot.py
 ```
 
 The validator checks:
@@ -301,11 +301,16 @@ When your bot is ready for the tournament:
 
 3. **Run a final check** to make sure your bot works without errors:
    ```bash
-   python3 main.py --games 50 --seed 42
+   python main.py --games 50 --seed 42
    ```
+
+   ```bash
+   python scripts/validate_bot.py bots/my_bot.py
+   ```
+
    If you see errors next to your bot's name, fix them before submitting.
 
-4. **Submit with submit50** Only your bot file will be submitted (e.g., `bot_<name>.py`). Do not modify any other files in the project.
+1. **Submit with submit50** Only your bot file will be submitted (e.g., `bot_<name>.py`). Do not modify any other files in the project.
 
 ```bash
 submit50 scienceacademy/problems/2025ap/rummybots
@@ -313,7 +318,7 @@ submit50 scienceacademy/problems/2025ap/rummybots
 
 ### Submission Checklist
 
-- [ ] Bot file is named something other than `student_bot_template.py`
+- [ ] Bot file is named something other than `student_bot_template.py`, and starts with `bot_`.
 - [ ] Bot class has a unique `name`
 - [ ] Bot runs in the tournament without errors
 - [ ] Bot does not import anything outside the standard library, `engine`, or `framework`
