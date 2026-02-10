@@ -246,7 +246,7 @@ def check_better_than_random(bot_class: type) -> ValidationResult:
 
         for _ in range(games_to_test):
             result = engine.play_game(bot, opponent, dealer=0, rng=None)
-            if result.winner_idx == 0:
+            if result.winner == 0:
                 wins += 1
 
         win_rate = wins / games_to_test
