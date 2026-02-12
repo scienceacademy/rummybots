@@ -17,6 +17,8 @@ The validator checks:
 
 import importlib.util
 import inspect
+import json
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -26,7 +28,7 @@ from typing import List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from engine.card import Card, Rank, Suit
-from engine.game import GameEngine, PlayerView
+from engine.game import GameEngine, GamePhase, PlayerView
 from framework.bot_interface import Bot
 from bots.random_bot import RandomBot
 
@@ -60,8 +62,72 @@ def check_file_exists(bot_path: str) -> ValidationResult:
     return ValidationResult(True, f"File exists: {bot_path}")
 
 
+def _check_bot_file_safe(bot_path: str) -> Optional[ValidationResult]:
+    """Run a basic safety check on the bot file in a subprocess.
+
+    Compiles and does a quick import in an isolated process so that
+    any top-level side effects (file I/O, network, os.system, etc.)
+    don't affect the validator's process.
+    """
+    check_script = (
+        "import sys, ast, importlib.util\n"
+        "path = sys.argv[1]\n"
+        "# Check for obviously dangerous top-level calls\n"
+        "try:\n"
+        "    tree = ast.parse(open(path).read(), path)\n"
+        "except SyntaxError as e:\n"
+        "    print(f'FAIL:Syntax error: {e}'); sys.exit(1)\n"
+        "DANGEROUS = {'exec', 'eval', 'compile', '__import__', 'open',\n"
+        "             'system', 'popen', 'subprocess', 'Popen'}\n"
+        "for node in ast.walk(tree):\n"
+        "    if isinstance(node, ast.Call):\n"
+        "        func = node.func\n"
+        "        name = None\n"
+        "        if isinstance(func, ast.Name):\n"
+        "            name = func.id\n"
+        "        elif isinstance(func, ast.Attribute):\n"
+        "            name = func.attr\n"
+        "        if name in DANGEROUS:\n"
+        "            print(f'WARN:Suspicious top-level call: {name}() at line {node.lineno}')\n"
+        "print('OK')\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", check_script, bot_path],
+            capture_output=True, text=True, timeout=10
+        )
+        output = result.stdout.strip()
+        lines = output.split("\n")
+        warnings = [l for l in lines if l.startswith("WARN:")]
+        fails = [l for l in lines if l.startswith("FAIL:")]
+
+        if fails:
+            return ValidationResult(False, fails[0].split(":", 1)[1])
+        if warnings:
+            msgs = "; ".join(w.split(":", 1)[1] for w in warnings)
+            return ValidationResult(
+                True,
+                f"Bot file has suspicious code (review before tournament use): {msgs}",
+                warning=True,
+            )
+        return None  # All clear
+    except subprocess.TimeoutExpired:
+        return ValidationResult(False, "Bot file took too long to parse (possible infinite loop at import time)")
+    except Exception as e:
+        return ValidationResult(False, f"Safety check failed: {e}")
+
+
 def load_bot_class(bot_path: str) -> Tuple[Optional[type], Optional[ValidationResult]]:
-    """Load the bot class from the file."""
+    """Load the bot class from the file.
+
+    First runs a subprocess safety check to catch dangerous top-level
+    code before executing it in-process.
+    """
+    # Pre-check in isolated subprocess
+    safety_result = _check_bot_file_safe(bot_path)
+    if safety_result and not safety_result.passed:
+        return None, safety_result
+
     try:
         # Load the module
         spec = importlib.util.spec_from_file_location("student_bot", bot_path)
@@ -160,7 +226,7 @@ def check_handles_empty_discard(bot_class: type) -> ValidationResult:
                 self.discard_pile = []
                 self.opponent_hand_size = 10
                 self.deck_size = 31
-                self.phase = "draw"
+                self.phase = GamePhase.DRAW
 
         view = MockView()
         decision = bot.draw_decision(view)
@@ -285,7 +351,13 @@ def validate_bot(bot_path: str) -> Tuple[bool, List[ValidationResult]]:
     if not result.passed:
         return False, results
 
-    # Check 2: Load bot class
+    # Check 2: Safety pre-check and load bot class
+    safety_result = _check_bot_file_safe(bot_path)
+    if safety_result:
+        results.append(safety_result)
+        if not safety_result.passed:
+            return False, results
+
     bot_class, result = load_bot_class(bot_path)
     results.append(result)
     if bot_class is None:

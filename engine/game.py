@@ -205,9 +205,15 @@ class GameEngine:
     draw_decision(), discard_decision(), and knock_decision().
     """
 
-    def __init__(self):
+    def __init__(self, on_event=None):
         self.state = GameState()
         self._drawn_from_discard: Optional[Card] = None
+        self._on_event = on_event
+
+    def _emit(self, event: str, **kwargs) -> None:
+        """Fire an event callback if one is registered."""
+        if self._on_event:
+            self._on_event(event, self.state, **kwargs)
 
     def play_game(self, bot0, bot1, dealer: int = 0, rng: random.Random = None) -> GameResult:
         """Run a complete game between two bots.
@@ -235,9 +241,15 @@ class GameEngine:
             if hasattr(bot, "on_game_start"):
                 bot.on_game_start(i, self.state.get_player_view(i))
 
+        self._emit("game_start", bots=bots, dealer=dealer)
+
+        turn = 0
         while self.state.phase != GamePhase.END:
+            turn += 1
             player = self.state.current_player
             bot = bots[player]
+
+            self._emit("turn_start", player=player, turn=turn)
 
             # Draw phase — call via trampoline for frame isolation + timeout
             view = self.state.get_player_view(player)
@@ -250,6 +262,8 @@ class GameEngine:
                     f"  Hint: Return a string \"deck\" or \"discard\" (lowercase)"
                 )
             self._execute_draw(player, draw_choice)
+            drawn_card = self.state.hands[player][-1]
+            self._emit("draw", player=player, choice=draw_choice, card=drawn_card)
 
             # Discard phase
             view = self.state.get_player_view(player)
@@ -262,10 +276,12 @@ class GameEngine:
                     f"  Hint: Return one of the Card objects from view.hand"
                 )
             self._execute_discard(player, discard_card)
+            self._emit("discard", player=player, card=discard_card)
 
             # Check for deck exhaustion
             if self.state.deck.remaining < 2:
                 self.state.phase = GamePhase.END
+                self._emit("deck_exhausted")
                 return GameResult(
                     winner=None, score=0, result_type="draw"
                 )
@@ -283,7 +299,9 @@ class GameEngine:
                         f"  Hint: Return True to knock, False to continue playing"
                     )
                 if knock:
-                    return self._execute_knock(player)
+                    result = self._execute_knock(player)
+                    self._emit("knock", player=player, result=result)
+                    return result
 
             # Notify bots of turn end
             for i, b in enumerate(bots):

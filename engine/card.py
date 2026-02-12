@@ -46,13 +46,23 @@ RANK_NAMES = {
 
 
 class Card:
-    """A playing card with a rank and suit."""
+    """A playing card with a rank and suit.
 
-    __slots__ = ("rank", "suit")
+    Card instances are immutable after creation to prevent bots from
+    corrupting game state through shared references.
+    """
+
+    __slots__ = ("rank", "suit", "_frozen")
 
     def __init__(self, rank: Rank, suit: Suit):
-        self.rank = rank
-        self.suit = suit
+        object.__setattr__(self, "rank", rank)
+        object.__setattr__(self, "suit", suit)
+        object.__setattr__(self, "_frozen", True)
+
+    def __setattr__(self, name, value):
+        if getattr(self, "_frozen", False):
+            raise AttributeError("Card objects are immutable")
+        object.__setattr__(self, name, value)
 
     @property
     def deadwood_value(self) -> int:

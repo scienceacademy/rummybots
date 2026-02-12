@@ -1,7 +1,7 @@
 """Run a single game between two bots with verbose output.
 
 Usage:
-    python3 examples/single_game.py
+    python examples/single_game.py
 """
 
 import random
@@ -17,85 +17,56 @@ from bots.basic_bot import BasicBot
 from bots.intermediate_bot import IntermediateBot
 
 
-class VerboseEngine(GameEngine):
-    """A game engine that prints each action as it happens."""
-
-    def play_game(self, bot0, bot1, dealer=0):
-        self.state.setup(dealer)
-        self._drawn_from_discard = None
-        bots = [bot0, bot1]
-        names = [bot0.name, bot1.name]
-
+def verbose_logger(event, state, **kwargs):
+    """Event callback that prints game actions as they happen."""
+    if event == "game_start":
+        bots = kwargs["bots"]
+        dealer = kwargs["dealer"]
+        # Store names on the function for later events
+        verbose_logger._names = [b.name for b in bots]
+        names = verbose_logger._names
         print(f"{'='*50}")
         print(f"  {names[0]} vs {names[1]}")
         print(f"  Dealer: {names[dealer]}")
         print(f"{'='*50}")
-        print(f"  Discard pile: {self.state.discard_pile[-1]}")
+        print(f"  Discard pile: {state.discard_pile[-1]}")
         print()
 
-        for i, bot in enumerate(bots):
-            if hasattr(bot, "on_game_start"):
-                bot.on_game_start(i, self.state.get_player_view(i))
+    elif event == "turn_start":
+        player = kwargs["player"]
+        turn = kwargs["turn"]
+        names = getattr(verbose_logger, "_names", ["Player 0", "Player 1"])
+        dw = calculate_deadwood(state.hands[player])
+        print(f"Turn {turn} — {names[player]} (deadwood: {dw})")
 
-        turn = 0
-        while self.state.phase != GamePhase.END:
-            turn += 1
-            player = self.state.current_player
-            bot = bots[player]
-            hand = self.state.hands[player]
-            dw = calculate_deadwood(hand)
+    elif event == "draw":
+        player = kwargs["player"]
+        choice = kwargs["choice"]
+        card = kwargs["card"]
+        choice_str = choice if isinstance(choice, str) else choice.value
+        if choice_str in ("discard", "DISCARD"):
+            print(f"  Drew from discard: {card}")
+        else:
+            print(f"  Drew from deck: {card}")
 
-            print(f"Turn {turn} — {names[player]} (deadwood: {dw})")
+    elif event == "discard":
+        player = kwargs["player"]
+        card = kwargs["card"]
+        dw = calculate_deadwood(state.hands[player])
+        print(f"  Discarded: {card}  (deadwood now: {dw})")
 
-            # Draw
-            view = self.state.get_player_view(player)
-            draw_choice = bot.draw_decision(view)
-            top_discard = self.state.discard_pile[-1] if self.state.discard_pile else None
-            self._execute_draw(player, draw_choice)
-            if draw_choice in ("discard", "DISCARD"):
-                print(f"  Drew from discard: {top_discard}")
-            else:
-                drawn = self.state.hands[player][-1]
-                print(f"  Drew from deck: {drawn}")
+    elif event == "deck_exhausted":
+        print(f"\n  Deck exhausted — DRAW")
 
-            # Discard
-            view = self.state.get_player_view(player)
-            discard_card = bot.discard_decision(view)
-            self._execute_discard(player, discard_card)
-            new_dw = calculate_deadwood(self.state.hands[player])
-            print(f"  Discarded: {discard_card}  (deadwood now: {new_dw})")
-
-            # Deck check
-            from engine import rules
-            if self.state.deck.remaining < 2:
-                self.state.phase = GamePhase.END
-                print(f"\n  Deck exhausted — DRAW")
-                from engine.game import GameResult
-                return GameResult(winner=None, score=0, result_type="draw")
-
-            # Knock check
-            if rules.can_knock(self.state.hands[player]):
-                self.state.phase = GamePhase.KNOCK
-                view = self.state.get_player_view(player)
-                if bot.knock_decision(view):
-                    result = self._execute_knock(player)
-                    if new_dw == 0:
-                        print(f"  ** GIN! **")
-                    else:
-                        print(f"  ** KNOCK! (deadwood: {new_dw}) **")
-                    print()
-                    return result
-
-            for i, bot in enumerate(bots):
-                if hasattr(bot, "on_turn_end"):
-                    bot.on_turn_end(self.state.get_player_view(i))
-
-            self.state.current_player = 1 - player
-            self.state.phase = GamePhase.DRAW
-            print()
-
-        from engine.game import GameResult
-        return GameResult(winner=None, score=0, result_type="draw")
+    elif event == "knock":
+        player = kwargs["player"]
+        result = kwargs["result"]
+        dw = calculate_deadwood(state.hands[player])
+        if dw == 0:
+            print(f"  ** GIN! **")
+        else:
+            print(f"  ** KNOCK! (deadwood: {dw}) **")
+        print()
 
 
 def main():
@@ -104,7 +75,7 @@ def main():
     bot0 = BasicBot()
     bot1 = IntermediateBot()
 
-    engine = VerboseEngine()
+    engine = GameEngine(on_event=verbose_logger)
     result = engine.play_game(bot0, bot1)
 
     print(f"{'='*50}")

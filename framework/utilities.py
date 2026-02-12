@@ -328,24 +328,26 @@ def score_discard_safety(
 
     Example:
         >>> seen = set(view.hand + view.discard_pile)
+        >>> # Pass only the opponent's discards, not the full pile.
+        >>> # Track opponent discards separately in on_turn_end().
         >>> safest = max(view.hand,
         ...              key=lambda c: score_discard_safety(
-        ...                  c, view.discard_pile, seen))
+        ...                  c, opponent_discards, seen))
         >>> # Discard the safest card
     """
     safety = 0.0
 
-    # Track cards opponent picked from discard pile (likely wants)
-    # This is a heuristic: in a real game you'd track opponent picks
-    # For now, penalize based on what opponent discarded (they don't want)
+    # Cards the opponent discarded are ones they don't want.
+    # Discarding a card of the same rank/nearby suit is SAFER because
+    # the opponent has shown they aren't collecting those cards.
     for disc in opponent_discards:
-        # Penalize same rank
+        # Reward same rank (opponent doesn't want this rank)
         if disc.rank == card.rank:
-            safety -= 5.0
-        # Penalize nearby suit cards (could be building runs)
+            safety += 5.0
+        # Reward nearby suit cards (opponent not building runs here)
         if (disc.suit == card.suit
                 and abs(disc.rank.value - card.rank.value) <= 2):
-            safety -= 3.0
+            safety += 3.0
 
     # Reward if many of the same rank are seen (set is blocked)
     seen_same_rank = sum(

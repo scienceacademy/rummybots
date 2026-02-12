@@ -308,6 +308,11 @@ def load_bots_from_directory(
     Scans Python files in the directory for classes that subclass Bot
     and instantiates them.
 
+    **Security warning**: Bot files are loaded via importlib and their
+    top-level code executes with full process privileges. Only load
+    bot files from trusted sources or review them before loading.
+    Use ``scripts/validate_bot.py`` to check student bots first.
+
     Args:
         directory: Path to the directory containing bot files.
         exclude: List of filenames to skip (e.g., ["student_bot_template.py"]).
