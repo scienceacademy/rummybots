@@ -1,7 +1,7 @@
 """Test your bot against the sample bots.
 
 Usage:
-    python3 examples/test_my_bot.py
+    python examples/test_my_bot.py
 
 Edit the 'my_bot' variable below to point to your bot class.
 """

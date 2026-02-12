@@ -1,7 +1,7 @@
 """Run a quick tournament with fewer games for fast iteration.
 
 Usage:
-    python3 examples/quick_tournament.py
+    python examples/quick_tournament.py
 """
 
 import sys

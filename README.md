@@ -6,20 +6,20 @@ A tournament framework for student-programmed bots to play Gin Rummy against eac
 
 ```bash
 # Run a tournament with all bots in the bots/ directory
-python3 main.py
+python main.py
 
 # Run with a fixed seed for reproducible results
-python3 main.py --seed 42
+python main.py --seed 42
 
 # Run fewer games per matchup for quick testing
-python3 main.py --games 20
+python main.py --games 20
 ```
 
 ## Creating Your Bot
 
 1. Copy `bots/student_bot_template.py` to a new file (e.g., `bots/my_bot.py`)
 2. Rename the class and implement your strategy
-3. Run `python3 main.py` to see how your bot performs
+3. Run `python main.py` to see how your bot performs
 
 See [STUDENT_GUIDE.md](STUDENT_GUIDE.md) for a detailed walkthrough.
 
@@ -40,6 +40,8 @@ rummybots/
 │   ├── basic_bot.py         # BasicBot — simple heuristics
 │   ├── intermediate_bot.py  # IntermediateBot — smarter strategy
 │   └── student_bot_template.py  # Template for student bots
+├── scripts/                 # Utility scripts
+│   └── validate_bot.py      # Bot validation tool
 ├── tests/                   # Test suite (192 tests)
 ├── main.py                  # Tournament runner CLI
 ├── STUDENT_GUIDE.md         # Guide for creating bots
@@ -80,7 +82,7 @@ Bots implement three methods:
 ## CLI Options
 
 ```
-python3 main.py [options]
+python main.py [options]
 
 Options:
   --games N     Games per bot pairing (default: 100)
@@ -92,7 +94,7 @@ Options:
 ## Running Tests
 
 ```bash
-python3 -m unittest discover -s tests -v
+python -m unittest discover -s tests -v
 ```
 
 ## Sample Tournament Output
