@@ -180,34 +180,56 @@ def card_deadwood_contribution(hand: List[Card], card: Card) -> int:
 
 # --- Advanced Strategy Utilities ---
 
-def is_provably_safe_discard(card: Card, seen_cards: Set[Card]) -> bool:
+def is_provably_safe_discard(
+    card: Card,
+    seen_cards: Set[Card],
+    my_hand: Set[Card] = None,
+) -> bool:
     """Check if a card is provably safe to discard.
 
     A card is "provably safe" if the opponent cannot use it to complete
-    any meld because sufficient blocking cards have been seen. This
-    involves checking both set safety and run safety.
+    any meld because sufficient blocking cards are unavailable to them.
 
-    Set-safe: 2+ of the other 3 same-rank cards are accounted for, so
-    opponent can't form a set of 3.
+    Cards unavailable to the opponent are those in the discard pile or
+    in your own hand (excluding the card being evaluated, since you're
+    about to discard it). If ``my_hand`` is provided, it is subtracted
+    from ``seen_cards`` so that cards in your hand are not counted as
+    blocking the opponent — only cards truly out of play count.
+
+    Set-safe: 2+ of the other 3 same-rank cards are unavailable to
+    opponent, so they can't form a set of 3.
 
     Run-safe: For every possible 3-card run containing this card, at
-    least one other required card is accounted for.
+    least one other required card is unavailable to opponent.
 
     Args:
         card: Card to check for safety.
-        seen_cards: All cards seen so far (your hand + discard pile).
+        seen_cards: All cards you know about (your hand + discard pile).
+        my_hand: Your hand as a set. If provided, cards in your hand
+            (other than ``card``) are excluded from the blocking set,
+            since the opponent could eventually acquire them.
 
     Returns:
         True if opponent cannot use this card in any meld.
 
     Example:
         >>> seen = set(view.hand + view.discard_pile)
+        >>> my_hand = set(view.hand)
         >>> safe_cards = [c for c in view.hand
-        ...               if is_provably_safe_discard(c, seen)]
+        ...               if is_provably_safe_discard(c, seen, my_hand)]
     """
+    # Cards truly unavailable to the opponent: seen cards minus our
+    # hand (we still hold those, opponent could get them later), but
+    # including the card we're evaluating (we're discarding it, so it
+    # won't stay in our hand).
+    if my_hand is not None:
+        unavailable = (seen_cards - my_hand) | {card}
+    else:
+        unavailable = seen_cards
+
     # Check set safety
     other_same_rank = sum(
-        1 for c in seen_cards
+        1 for c in unavailable
         if c.rank == card.rank and c != card
     )
     set_safe = other_same_rank >= 2
@@ -222,7 +244,7 @@ def is_provably_safe_discard(card: Card, seen_cards: Set[Card]) -> bool:
         other_vals = [v for v in vals if v != cv]
         opponent_can_have_all = True
         for v in other_vals:
-            if Card(Rank(v), card.suit) in seen_cards:
+            if Card(Rank(v), card.suit) in unavailable:
                 opponent_can_have_all = False
                 break
         if opponent_can_have_all:
@@ -360,12 +382,11 @@ def score_discard_safety(
 
 
 def count_near_melds(hand: List[Card]) -> int:
-    """Count cards that are one card away from forming a meld.
+    """Count card groupings that are one card away from forming a meld.
 
     Near-melds include:
     - Pairs (2 cards of same rank) - one more card needed for a set
     - Two consecutive cards of same suit - one more card needed for a run
-    - Cards separated by one rank in same suit (e.g., 4♥ and 6♥)
 
     Args:
         hand: Cards to analyze.
@@ -391,24 +412,18 @@ def count_near_melds(hand: List[Card]) -> int:
         if count == 2:
             near_melds += 1  # Pair needs one more for set
 
-    # Count potential runs (consecutive or gap-1 same suit)
+    # Count potential runs (consecutive same suit).
+    # Only count each adjacent pair once: check upward from each card.
     for card in hand:
         cv = card.rank.value
         suit = card.suit
 
-        # Check for consecutive card
         if cv < 13:  # Not King
             next_card = Card(Rank(cv + 1), suit)
             if next_card in hand_set:
                 near_melds += 1
 
-        # Check for gap-1 (e.g., 4 and 6, need 5)
-        if cv < 12:  # Not Queen or King
-            gap_card = Card(Rank(cv + 2), suit)
-            if gap_card in hand_set:
-                near_melds += 0.5  # Half credit for gap-1
-
-    return int(near_melds)
+    return near_melds
 
 
 def calculate_hand_strength(hand: List[Card]) -> float:

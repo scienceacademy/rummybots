@@ -169,8 +169,6 @@ def run_match(
         else:
             game_rng = random.Random()
 
-        # Alternate dealer each game
-        dealer = game_num % 2
         # Alternate which bot is player 0 each game for fairness
         if game_num % 2 == 0:
             p0, p1 = bot0, bot1
@@ -179,10 +177,14 @@ def run_match(
             p0, p1 = bot1, bot0
             bot0_idx = 1
 
+        # Alternate dealer independently of position so that
+        # first-mover advantage is evenly distributed.
+        dealer = (game_num // 2) % 2
+
         try:
             game_result = engine.play_game(p0, p1, dealer=dealer, rng=game_rng)
             result.record_game(game_result, bot0_idx=bot0_idx)
-        except (InvalidMoveError, Exception) as e:
+        except Exception as e:
             result.record_error(
                 f"Game {game_num}: {type(e).__name__}: {e}"
             )

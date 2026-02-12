@@ -95,6 +95,7 @@ def _find_best_melds_recursive(
     current_melds: List[Meld],
     best: List[List[Meld]],
     best_deadwood: List[int],
+    start_idx: int = 0,
 ) -> None:
     """Recursively find the combination of non-overlapping melds
     that minimizes deadwood."""
@@ -105,7 +106,10 @@ def _find_best_melds_recursive(
         best_deadwood[0] = current_dw
         best[0] = list(current_melds)
 
-    for meld in all_melds:
+    # Only consider melds at or after start_idx to avoid
+    # exploring the same combination in different orderings.
+    for i in range(start_idx, len(all_melds)):
+        meld = all_melds[i]
         meld_set = set(meld)
         if meld_set.issubset(remaining_set):
             new_remaining = [c for c in remaining if c not in meld_set]
@@ -115,6 +119,7 @@ def _find_best_melds_recursive(
                 current_melds + [meld],
                 best,
                 best_deadwood,
+                start_idx=i + 1,
             )
 
 
@@ -203,7 +208,12 @@ def score_hand(
     defender_hand: List[Card],
     is_gin: bool = False,
 ) -> Tuple[int, str]:
-    """Score a completed hand after a knock or gin.
+    """Score a completed hand after a knock or gin (without layoffs).
+
+    NOTE: This function does NOT apply layoffs. The game engine uses
+    ``score_with_layoffs()`` instead, which gives the defender credit
+    for laying off unmelded cards onto the knocker's melds. Use this
+    only if you want a raw score comparison without layoff handling.
 
     Args:
         knocker_hand: The hand of the player who knocked/ginned.
