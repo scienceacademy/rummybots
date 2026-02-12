@@ -400,6 +400,17 @@ class TestPlayerViewImmutability(unittest.TestCase):
         self.assertFalse(hasattr(view, "opponent_hand"))
         self.assertEqual(view.opponent_hand_size, 10)
 
+    def test_card_objects_are_immutable(self):
+        """Mutating a Card from view.hand must not affect internal state."""
+        view = self._make_view()
+        card = view.hand[0]
+        with self.assertRaises(AttributeError):
+            card.rank = Rank.ACE
+        with self.assertRaises(AttributeError):
+            card.suit = Suit.CLUBS
+        # Original card unchanged
+        self.assertEqual(view.hand[0], c("5", "H"))
+
 
 if __name__ == "__main__":
     unittest.main()

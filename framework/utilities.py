@@ -280,9 +280,9 @@ def count_meld_outs(card: Card, hand: List[Card], seen_cards: Set[Card]) -> int:
     others = [c for c in hand if c != card]
     outs: Set[Card] = set()
 
-    # Set outs: have a pair, need a third
+    # Set outs: have a pair (need a third) or three-of-a-kind (need the fourth)
     same_rank = sum(1 for c in others if c.rank == card.rank)
-    if same_rank == 1:
+    if same_rank >= 1:
         for c in unseen:
             if c.rank == card.rank:
                 outs.add(c)
