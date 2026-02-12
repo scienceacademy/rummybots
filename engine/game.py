@@ -21,7 +21,7 @@ class BotTimeoutError(Exception):
     pass
 
 
-def _call_bot_method(method, view, timeout=BOT_TIMEOUT_SECONDS):
+def _call_bot_method(method, *args, timeout=BOT_TIMEOUT_SECONDS):
     """Call a bot method with timeout and frame isolation.
 
     This is a standalone function (not a GameEngine method) so that
@@ -31,11 +31,13 @@ def _call_bot_method(method, view, timeout=BOT_TIMEOUT_SECONDS):
 
     Uses signal.alarm on Unix for zero-overhead timeout enforcement.
     """
+    method_name = getattr(method, "__name__", str(method))
+
     if _HAS_SIGALRM:
         def _timeout_handler(signum, frame):
             raise BotTimeoutError(
                 f"Bot decision method timed out:\n"
-                f"  Method: {method.__name__}()\n"
+                f"  Method: {method_name}()\n"
                 f"  Time limit: {timeout} seconds\n"
                 f"  Hint: Your bot is taking too long. Check for:\n"
                 f"    - Infinite loops\n"
@@ -46,7 +48,7 @@ def _call_bot_method(method, view, timeout=BOT_TIMEOUT_SECONDS):
         signal.alarm(timeout)
 
     try:
-        result = method(view)
+        result = method(*args)
     finally:
         if _HAS_SIGALRM:
             signal.alarm(0)
@@ -236,10 +238,10 @@ class GameEngine:
         self._drawn_from_discard = None
         bots = [bot0, bot1]
 
-        # Notify bots of game start
+        # Notify bots of game start (with timeout protection)
         for i, bot in enumerate(bots):
             if hasattr(bot, "on_game_start"):
-                bot.on_game_start(i, self.state.get_player_view(i))
+                _call_bot_method(bot.on_game_start, i, self.state.get_player_view(i))
 
         self._emit("game_start", bots=bots, dealer=dealer)
 
@@ -250,6 +252,16 @@ class GameEngine:
             bot = bots[player]
 
             self._emit("turn_start", player=player, turn=turn)
+
+            # Check for deck exhaustion before draw — standard rule is
+            # to declare a draw when fewer than 2 cards remain before
+            # a player would draw, so both players get fair chances.
+            if self.state.deck.remaining < 2:
+                self.state.phase = GamePhase.END
+                self._emit("deck_exhausted")
+                return GameResult(
+                    winner=None, score=0, result_type="draw"
+                )
 
             # Draw phase — call via trampoline for frame isolation + timeout
             view = self.state.get_player_view(player)
@@ -278,14 +290,6 @@ class GameEngine:
             self._execute_discard(player, discard_card)
             self._emit("discard", player=player, card=discard_card)
 
-            # Check for deck exhaustion
-            if self.state.deck.remaining < 2:
-                self.state.phase = GamePhase.END
-                self._emit("deck_exhausted")
-                return GameResult(
-                    winner=None, score=0, result_type="draw"
-                )
-
             # Knock phase (only if eligible)
             if rules.can_knock(self.state.hands[player]):
                 self.state.phase = GamePhase.KNOCK
@@ -301,6 +305,10 @@ class GameEngine:
                 if knock:
                     result = self._execute_knock(player)
                     self._emit("knock", player=player, result=result)
+                    # Notify bots of turn end before returning
+                    for i, b in enumerate(bots):
+                        if hasattr(b, "on_turn_end"):
+                            b.on_turn_end(self.state.get_player_view(i))
                     return result
 
             # Notify bots of turn end

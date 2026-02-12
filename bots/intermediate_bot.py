@@ -46,6 +46,7 @@ class IntermediateBot(Bot):
         self._seen_discards = set()
         self._opponent_picks = set()
         self._last_discard_len = len(view.discard_pile)
+        self._drew_from_discard = None
 
     def on_turn_end(self, view: PlayerView) -> None:
         current_len = len(view.discard_pile)
