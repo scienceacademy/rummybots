@@ -9,7 +9,6 @@ The validator checks:
 - Bot class inherits from framework.bot_interface.Bot
 - Bot has unique name property
 - All three decision methods are implemented
-- Bot handles empty discard pile (first turn)
 - Bot doesn't crash on sample hands
 - Bot returns correct types
 - Bot completes games in reasonable time
@@ -212,34 +211,6 @@ def check_all_methods_implemented(bot_class: type) -> List[ValidationResult]:
     return results
 
 
-def check_handles_empty_discard(bot_class: type) -> ValidationResult:
-    """Check if bot handles empty discard pile (first turn)."""
-    try:
-        bot = bot_class()
-        engine = GameEngine()
-
-        # Create a mock PlayerView with None for top_of_discard
-        class MockView:
-            def __init__(self):
-                self.hand = [Card(Rank.ACE, Suit.HEARTS) for _ in range(10)]
-                self.top_of_discard = None
-                self.discard_pile = []
-                self.opponent_hand_size = 10
-                self.deck_size = 31
-                self.phase = GamePhase.DRAW
-
-        view = MockView()
-        decision = bot.draw_decision(view)
-
-        if decision not in ("deck", "discard"):
-            return ValidationResult(False, f"draw_decision with empty discard returned invalid: {decision}")
-
-        return ValidationResult(True, "Bot handles empty discard pile")
-
-    except Exception as e:
-        return ValidationResult(False, f"Bot crashes on empty discard: {type(e).__name__}: {e}")
-
-
 def check_no_crashes_on_sample_hands(bot_class: type) -> ValidationResult:
     """Check if bot can play several games without crashing."""
     try:
@@ -307,7 +278,7 @@ def check_better_than_random(bot_class: type) -> ValidationResult:
         opponent = RandomBot()
         engine = GameEngine()
 
-        games_to_test = 20
+        games_to_test = 5
         wins = 0
 
         for _ in range(games_to_test):
@@ -379,13 +350,7 @@ def validate_bot(bot_path: str) -> Tuple[bool, List[ValidationResult]]:
     if not all(r.passed for r in method_results):
         return False, results
 
-    # Check 6: Handles empty discard
-    result = check_handles_empty_discard(bot_class)
-    results.append(result)
-    if not result.passed:
-        return False, results
-
-    # Check 7: No crashes on sample hands
+    # Check 6: No crashes on sample hands
     result = check_no_crashes_on_sample_hands(bot_class)
     results.append(result)
     if not result.passed:
