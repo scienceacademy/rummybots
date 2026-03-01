@@ -12,6 +12,10 @@ from engine import rules
 # Timeout in seconds for each bot decision call
 BOT_TIMEOUT_SECONDS = 5
 
+# Maximum turns before declaring a draw. Prevents infinite loops when
+# both bots repeatedly draw from the discard pile and never knock.
+MAX_TURNS = 100
+
 # Whether signal-based timeouts are available (Unix only)
 _HAS_SIGALRM = hasattr(signal, "SIGALRM") and os.name != "nt"
 
@@ -256,7 +260,7 @@ class GameEngine:
             # Check for deck exhaustion before draw — standard rule is
             # to declare a draw when fewer than 2 cards remain before
             # a player would draw, so both players get fair chances.
-            if self.state.deck.remaining < 2:
+            if self.state.deck.remaining < 2 or turn > MAX_TURNS:
                 self.state.phase = GamePhase.END
                 self._emit("deck_exhausted")
                 return GameResult(
