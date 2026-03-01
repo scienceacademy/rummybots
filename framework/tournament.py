@@ -325,14 +325,25 @@ def _run_tournament_parallel(
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             i, j = pairing_map[idx]
-            match = future.result()
-            match_results[idx] = match
             completed += 1
 
+            try:
+                match = future.result()
+            except Exception as e:
+                # Worker crashed — create an empty result with the error recorded
+                match = MatchResult(bots[i].name, bots[j].name)
+                match.record_error(f"Worker process error: {type(e).__name__}: {e}")
+                if verbose:
+                    print(
+                        f"  Match {completed}/{total_matches} ERROR: "
+                        f"{bots[i].name} vs {bots[j].name}: {e}"
+                    )
+
+            match_results[idx] = match
             stats[bots[i].name].record_match(bots[j].name, match, is_bot0=True)
             stats[bots[j].name].record_match(bots[i].name, match, is_bot0=False)
 
-            if verbose:
+            if verbose and not match.errors:
                 print(
                     f"  Match {completed}/{total_matches} done: "
                     f"{match.bot0_name} vs {match.bot1_name} "
@@ -369,6 +380,182 @@ def format_rankings(rankings: List[BotStats]) -> str:
 
     lines.append("=" * 70)
     return "\n".join(lines)
+
+
+def format_html_report(
+    rankings: List[BotStats],
+    matches: List[MatchResult],
+    games_per_match: int,
+) -> str:
+    """Generate an HTML tournament report."""
+
+    # Build head-to-head matrix data
+    names = [s.name for s in rankings]
+    h2h_cells = {}
+    for s in rankings:
+        for opp, (w, l) in s.head_to_head.items():
+            h2h_cells[(s.name, opp)] = (w, l)
+
+    # Rankings table rows
+    ranking_rows = ""
+    for rank, s in enumerate(rankings, 1):
+        ranking_rows += f"""<tr>
+            <td data-v="{rank}">{rank}</td>
+            <td class="bot-name" data-v="{s.name}">{s.name}</td>
+            <td data-v="{s.wins}">{s.wins}</td>
+            <td data-v="{s.losses}">{s.losses}</td>
+            <td data-v="{s.draws}">{s.draws}</td>
+            <td class="pct" data-v="{s.win_rate:.4f}">{s.win_rate:.1%}</td>
+            <td data-v="{s.total_points}">{s.total_points}</td>
+            <td data-v="{s.avg_points:.2f}">{s.avg_points:.1f}</td>
+            <td data-v="{s.gins}">{s.gins}</td>
+            <td data-v="{s.undercuts}">{s.undercuts}</td>
+        </tr>"""
+
+    # Head-to-head table
+    h2h_header = "".join(
+        f'<th class="h2h-name">{n}</th>' for n in names
+    )
+    h2h_rows = ""
+    for row_name in names:
+        cells = f'<td class="bot-name">{row_name}</td>'
+        for col_name in names:
+            if row_name == col_name:
+                cells += '<td class="self">&mdash;</td>'
+            else:
+                w, l = h2h_cells.get((row_name, col_name), (0, 0))
+                total = w + l
+                pct = w / total if total else 0
+                if pct > 0.55:
+                    cls = "win"
+                elif pct < 0.45:
+                    cls = "loss"
+                else:
+                    cls = "even"
+                cells += f'<td class="{cls}">{w}-{l}</td>'
+        h2h_rows += f"<tr>{cells}</tr>"
+
+    # Error summary
+    total_errors = sum(len(m.errors) for m in matches)
+    error_section = ""
+    if total_errors > 0:
+        error_lines = []
+        for m in matches:
+            for err in m.errors[:3]:
+                error_lines.append(
+                    f"<li>{m.bot0_name} vs {m.bot1_name}: {err}</li>"
+                )
+            if len(m.errors) > 3:
+                error_lines.append(
+                    f"<li>... and {len(m.errors) - 3} more</li>"
+                )
+        error_section = f"""
+        <div class="errors">
+            <h2>Errors ({total_errors})</h2>
+            <ul>{"".join(error_lines)}</ul>
+        </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gin Rummy Tournament Results</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #f5f5f5; color: #222; padding: 2rem; }}
+  h1 {{ text-align: center; margin-bottom: 0.25rem; font-size: 1.8rem; }}
+  .meta {{ text-align: center; color: #666; margin-bottom: 2rem; font-size: 0.9rem; }}
+  .card {{ background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+           padding: 1.5rem; margin-bottom: 1.5rem; overflow-x: auto; }}
+  h2 {{ margin-bottom: 1rem; font-size: 1.2rem; }}
+  table {{ border-collapse: collapse; width: 100%; font-size: 0.9rem; }}
+  th, td {{ padding: 0.5rem 0.75rem; text-align: right; border-bottom: 1px solid #eee; }}
+  th {{ background: #fafafa; font-weight: 600; position: sticky; top: 0; }}
+  td.bot-name {{ text-align: left; font-weight: 600; }}
+  th:first-child, td:first-child {{ text-align: center; }}
+  tr.top {{ background: #fffbe6; }}
+  tr:hover {{ background: #f0f7ff; }}
+  .pct {{ font-weight: 600; }}
+  /* h2h */
+  .h2h-name {{ writing-mode: vertical-rl; text-orientation: mixed; font-size: 0.8rem;
+               white-space: nowrap; padding: 0.5rem 0.25rem; }}
+  td.self {{ background: #f0f0f0; color: #aaa; text-align: center; }}
+  td.win {{ background: #e6f4ea; color: #1a7f37; text-align: center; font-weight: 600; }}
+  td.loss {{ background: #ffeef0; color: #cf222e; text-align: center; }}
+  td.even {{ background: #fff8e1; text-align: center; }}
+  .errors {{ background: #fff3f3; border-radius: 8px; padding: 1.5rem; }}
+  .errors h2 {{ color: #cf222e; }}
+  .errors ul {{ margin-left: 1.5rem; font-size: 0.85rem; }}
+  /* sortable headers */
+  th.sortable {{ cursor: pointer; user-select: none; position: relative; padding-right: 1.2rem; }}
+  th.sortable:hover {{ background: #eef; }}
+  th.sortable::after {{ content: "\\2195"; position: absolute; right: 0.2rem; opacity: 0.3; font-size: 0.75rem; }}
+  th.sortable.asc::after {{ content: "\\2191"; opacity: 0.8; }}
+  th.sortable.desc::after {{ content: "\\2193"; opacity: 0.8; }}
+</style>
+</head>
+<body>
+<h1>Gin Rummy Tournament</h1>
+<p class="meta">{len(rankings)} bots &middot; {games_per_match} games per match</p>
+
+<div class="card">
+<h2>Rankings</h2>
+<table id="rankings">
+<thead><tr>
+  <th class="sortable desc" data-col="0" data-type="num">#</th>
+  <th class="sortable" data-col="1" data-type="str" style="text-align:left">Bot</th>
+  <th class="sortable" data-col="2" data-type="num">W</th>
+  <th class="sortable" data-col="3" data-type="num">L</th>
+  <th class="sortable" data-col="4" data-type="num">D</th>
+  <th class="sortable" data-col="5" data-type="num">Win%</th>
+  <th class="sortable" data-col="6" data-type="num">Pts</th>
+  <th class="sortable" data-col="7" data-type="num">Avg</th>
+  <th class="sortable" data-col="8" data-type="num">Gins</th>
+  <th class="sortable" data-col="9" data-type="num">Undercuts</th>
+</tr></thead>
+<tbody>
+{ranking_rows}
+</tbody>
+</table>
+</div>
+
+<div class="card">
+<h2>Head-to-Head</h2>
+<table>
+<tr><th></th>{h2h_header}</tr>
+{h2h_rows}
+</table>
+</div>
+
+{error_section}
+
+<script>
+document.querySelectorAll("#rankings th.sortable").forEach(th => {{
+  th.addEventListener("click", () => {{
+    const table = document.getElementById("rankings");
+    const tbody = table.querySelector("tbody");
+    const rows = Array.from(tbody.querySelectorAll("tr"));
+    const col = parseInt(th.dataset.col);
+    const type = th.dataset.type;
+    const isAsc = th.classList.contains("asc");
+    const dir = isAsc ? -1 : 1;
+
+    rows.sort((a, b) => {{
+      const av = a.children[col].dataset.v;
+      const bv = b.children[col].dataset.v;
+      if (type === "num") return (parseFloat(av) - parseFloat(bv)) * dir;
+      return av.localeCompare(bv) * dir;
+    }});
+
+    table.querySelectorAll("th.sortable").forEach(h => h.classList.remove("asc", "desc"));
+    th.classList.add(isAsc ? "desc" : "asc");
+    rows.forEach(r => tbody.appendChild(r));
+  }});
+}});
+</script>
+</body>
+</html>"""
 
 
 def format_head_to_head(rankings: List[BotStats]) -> str:

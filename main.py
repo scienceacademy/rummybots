@@ -6,13 +6,19 @@ Usage:
     python main.py --seed 42        # Set random seed for reproducibility
     python main.py --no-h2h         # Skip head-to-head details
     python main.py --no-parallel     # Run matches sequentially (for debugging)
+    python main.py --html            # Also generate HTML report and open in browser
+    python main.py --html out.html   # Save HTML report to specific file
 """
 
 import argparse
+import os
 import sys
+import tempfile
+import webbrowser
 
 from framework.tournament import (
     format_head_to_head,
+    format_html_report,
     format_rankings,
     load_bots_from_directory,
     run_tournament,
@@ -43,6 +49,10 @@ def main():
         "--no-parallel", action="store_true",
         help="Disable parallel match execution (useful for debugging)",
     )
+    parser.add_argument(
+        "--html", nargs="?", const=True, default=False, metavar="FILE",
+        help="Generate HTML report (optionally specify output file path)",
+    )
     args = parser.parse_args()
 
     print("Loading bots...")
@@ -71,6 +81,19 @@ def main():
 
     if not args.no_h2h:
         print(format_head_to_head(rankings))
+
+    if args.html:
+        html = format_html_report(rankings, matches, args.games)
+        if isinstance(args.html, str):
+            html_path = args.html
+        else:
+            html_path = os.path.join(
+                tempfile.gettempdir(), "rummy_tournament.html"
+            )
+        with open(html_path, "w") as f:
+            f.write(html)
+        print(f"\nHTML report: {html_path}")
+        webbrowser.open(f"file://{os.path.abspath(html_path)}")
 
     # Report any errors
     total_errors = sum(len(m.errors) for m in matches)
