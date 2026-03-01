@@ -9,6 +9,8 @@ import inspect
 import os
 import random
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from itertools import combinations
 from typing import Dict, List, Optional, Tuple, Type
 
@@ -192,11 +194,18 @@ def run_match(
     return result
 
 
+def _run_match_worker(args):
+    """Worker function for parallel match execution."""
+    bot0, bot1, num_games, seed = args
+    return run_match(bot0, bot1, num_games, seed=seed)
+
+
 def run_tournament(
     bots: List[Bot],
     games_per_match: int = 100,
     seed: Optional[int] = None,
     verbose: bool = True,
+    parallel: bool = True,
 ) -> Tuple[List[BotStats], List[MatchResult]]:
     """Run a round-robin tournament.
 
@@ -208,6 +217,7 @@ def run_tournament(
         games_per_match: Number of games per bot pairing.
         seed: Base random seed for reproducibility.
         verbose: Print progress during tournament.
+        parallel: Run matches in parallel using multiple processes.
 
     Returns:
         A tuple of (rankings, match_results) where rankings is a
@@ -223,10 +233,35 @@ def run_tournament(
         raise ValueError(f"Duplicate bot names found: {names}")
 
     pairings = list(combinations(range(len(bots)), 2))
-    match_results: List[MatchResult] = []
     stats: Dict[str, BotStats] = {b.name: BotStats(b.name) for b in bots}
-
     total_matches = len(pairings)
+
+    if parallel and total_matches >= 2:
+        match_results = _run_tournament_parallel(
+            bots, pairings, games_per_match, seed, verbose, stats
+        )
+    else:
+        match_results = _run_tournament_sequential(
+            bots, pairings, games_per_match, seed, verbose, stats
+        )
+
+    # Sort by win rate descending, then by total points
+    rankings = sorted(
+        stats.values(),
+        key=lambda s: (s.win_rate, s.total_points),
+        reverse=True,
+    )
+
+    return rankings, match_results
+
+
+def _run_tournament_sequential(
+    bots, pairings, games_per_match, seed, verbose, stats
+):
+    """Run tournament matches sequentially."""
+    match_results: List[MatchResult] = []
+    total_matches = len(pairings)
+
     for match_num, (i, j) in enumerate(pairings):
         bot0, bot1 = bots[i], bots[j]
         if verbose:
@@ -238,27 +273,78 @@ def run_tournament(
             )
 
         match_seed = seed + match_num * 1000 if seed is not None else None
+        match_start = time.monotonic()
         match = run_match(bot0, bot1, games_per_match, seed=match_seed)
+        match_elapsed = time.monotonic() - match_start
         match_results.append(match)
 
-        # Update per-bot stats
         stats[bot0.name].record_match(bot1.name, match, is_bot0=True)
         stats[bot1.name].record_match(bot0.name, match, is_bot0=False)
 
         if verbose:
+            ms_per_game = (match_elapsed / games_per_match) * 1000
             print(
                 f" {match.bot0_wins}-{match.bot1_wins}"
                 f" ({match.draws} draws)"
+                f"  [{ms_per_game:.1f}ms/game]"
             )
 
-    # Sort by win rate descending, then by total points
-    rankings = sorted(
-        stats.values(),
-        key=lambda s: (s.win_rate, s.total_points),
-        reverse=True,
-    )
+    return match_results
 
-    return rankings, match_results
+
+def _run_tournament_parallel(
+    bots, pairings, games_per_match, seed, verbose, stats
+):
+    """Run tournament matches in parallel using multiple processes."""
+    total_matches = len(pairings)
+    workers = os.cpu_count() or 1
+
+    if verbose:
+        print(f"  Running {total_matches} matches across {workers} workers...")
+
+    # Build work items: (bot0, bot1, num_games, seed) for each pairing
+    work_items = []
+    for match_num, (i, j) in enumerate(pairings):
+        match_seed = seed + match_num * 1000 if seed is not None else None
+        work_items.append((bots[i], bots[j], games_per_match, match_seed))
+
+    # Map match_num to pairing indices for stats aggregation
+    pairing_map = {match_num: (i, j) for match_num, (i, j) in enumerate(pairings)}
+
+    # Submit all matches and collect results as they complete
+    match_results = [None] * total_matches
+    completed = 0
+    tournament_start = time.monotonic()
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        future_to_idx = {
+            executor.submit(_run_match_worker, item): idx
+            for idx, item in enumerate(work_items)
+        }
+
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            i, j = pairing_map[idx]
+            match = future.result()
+            match_results[idx] = match
+            completed += 1
+
+            stats[bots[i].name].record_match(bots[j].name, match, is_bot0=True)
+            stats[bots[j].name].record_match(bots[i].name, match, is_bot0=False)
+
+            if verbose:
+                print(
+                    f"  Match {completed}/{total_matches} done: "
+                    f"{match.bot0_name} vs {match.bot1_name} "
+                    f"{match.bot0_wins}-{match.bot1_wins}"
+                    f" ({match.draws} draws)"
+                )
+
+    if verbose:
+        elapsed = time.monotonic() - tournament_start
+        print(f"  All matches completed in {elapsed:.1f}s")
+
+    return match_results
 
 
 def format_rankings(rankings: List[BotStats]) -> str:

@@ -5,6 +5,7 @@ Usage:
     python main.py --games 50       # Set games per match
     python main.py --seed 42        # Set random seed for reproducibility
     python main.py --no-h2h         # Skip head-to-head details
+    python main.py --no-parallel     # Run matches sequentially (for debugging)
 """
 
 import argparse
@@ -38,6 +39,10 @@ def main():
         "--quiet", action="store_true",
         help="Suppress match-by-match progress output",
     )
+    parser.add_argument(
+        "--no-parallel", action="store_true",
+        help="Disable parallel match execution (useful for debugging)",
+    )
     args = parser.parse_args()
 
     print("Loading bots...")
@@ -59,6 +64,7 @@ def main():
         games_per_match=args.games,
         seed=args.seed,
         verbose=not args.quiet,
+        parallel=not args.no_parallel,
     )
 
     print(format_rankings(rankings))
